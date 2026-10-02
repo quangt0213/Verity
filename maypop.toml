@@ -1,0 +1,19 @@
+# Maypop app manifest. `maypop init` reads [app] to seed the remote app;
+# afterwards apply metadata changes with `maypop app apply`.
+[app]
+name = "Verity"
+description = "What's actually happening around you, and the evidence behind it."
+visibility = "private"
+link_access = "request"
+# The repository also holds non-frontend code (shared contracts, and later the
+# Verity service source). No secrets live in Git, but keep source sharing off.
+allow_remixing = false
+tags = ["local", "community", "maps"]
+
+# Only the static frontend in apps/web is built and uploaded. `maypop publish`
+# builds locally, so VITE_* values come from apps/web/.env.production.local.
+[build]
+framework = "vite"
+command = ["npm", "run", "build:web"]
+output = "apps/web/dist"
+entry = "index.html"
