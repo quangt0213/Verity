@@ -1,5 +1,5 @@
 import { EVENT_STATUSES } from "@verity/contracts";
-import { LogIn, Monitor, Moon, Sun } from "lucide";
+import { LogIn, LogOut, Monitor, Moon, Sun } from "lucide";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useApi } from "../../api/ApiProvider";
@@ -11,6 +11,7 @@ import { StatusBadge } from "../../components/ui/StatusBadge";
 import { STATUS_DISPLAY } from "../../lib/display";
 import { readStored, STORAGE_KEYS, writeStored } from "../../lib/storage";
 import { useMaypop } from "../../maypop/MaypopProvider";
+import { useAuth } from "../auth/AuthProvider";
 import { useTheme, type ThemePreference } from "../../theme/ThemeProvider";
 
 interface NotificationPrefs {
@@ -51,6 +52,7 @@ function SectionTitle({ id, children }: { id: string; children: string }) {
 export function SettingsPage() {
   const { preference, setPreference } = useTheme();
   const maypop = useMaypop();
+  const auth = useAuth();
   const api = useApi();
   const navigate = useNavigate();
   const [prefs, setPrefs] = useState<NotificationPrefs>(() => readStored(STORAGE_KEYS.notificationPrefs, parsePrefs, DEFAULT_PREFS));
@@ -87,9 +89,37 @@ export function SettingsPage() {
         <Card>
           <section aria-labelledby="account-heading" id="account">
             <SectionTitle id="account-heading">Account</SectionTitle>
+
+            <h3 className="mt-3 text-sm font-semibold">Verity account</h3>
+            {!auth.available ? (
+              <p className="mt-1 text-sm text-muted">This demo doesn't use accounts.</p>
+            ) : auth.session ? (
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-sm">
+                <p>
+                  Signed in as <span className="font-medium">{auth.session.user.email_masked}</span>
+                </p>
+                <Button variant="secondary" size="sm" onClick={() => void auth.signOut()}>
+                  <Icon icon={LogOut} size={16} />
+                  Sign out
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-sm">
+                <p className="text-muted">Not signed in. Browsing never needs an account.</p>
+                <Button variant="secondary" size="sm" onClick={() => void auth.requestSignIn()}>
+                  <Icon icon={LogIn} size={16} />
+                  Sign in
+                </Button>
+              </div>
+            )}
+            <p className="mt-1 text-xs text-muted">
+              Needed only to report, answer or follow. Verity signs you in with a one-time code sent to your email.
+            </p>
+
+            <h3 className="mt-4 text-sm font-semibold">Maypop profile</h3>
             {maypop.status === "connected" && maypop.viewer && !maypop.viewer.isAnonymous ? (
               <p className="mt-1 text-sm">
-                Signed in to Maypop as <span className="font-medium">{maypop.viewer.username}</span>.
+                Shown as <span className="font-medium">{maypop.viewer.username}</span>.
               </p>
             ) : maypop.status === "connected" ? (
               <div className="mt-1 text-sm">
@@ -104,10 +134,10 @@ export function SettingsPage() {
             ) : (
               <p className="mt-1 text-sm text-muted">Not running inside Maypop.</p>
             )}
-            <p className="mt-3 text-xs text-muted">
-              Verity shows your Maypop name for display only. Maypop gives apps a private, app-specific identity that Verity's service
-              can't independently verify, so Verity doesn't use it to record reports or confirmations. Those stay unavailable until
-              Verity has its own account verification.
+            <p className="mt-1 text-xs text-muted">
+              Your Maypop name is shown for display only. Maypop gives apps a private, app-specific identity that Verity's
+              service can't verify, so it's never used to sign you in or to record anything, and it isn't linked to your
+              Verity account.
             </p>
           </section>
         </Card>

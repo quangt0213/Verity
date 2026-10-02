@@ -56,6 +56,11 @@ export function buildCsp({ apiUrl, mapStyleUrls, extraMapOrigins }: CspInputs): 
   const maypop = "https://*.maypop.ai";
   const connect = new Set<string>(["'self'", maypop]);
   const apiOrigin = originOf(apiUrl);
+  if (apiOrigin?.includes("[")) {
+    // CSP source expressions can't contain IPv6 literals; the browser would
+    // silently drop the entry and block every API call.
+    throw new Error("VITE_VERITY_API_URL must use a hostname or IPv4 address, not an IPv6 literal (CSP can't express it).");
+  }
   if (apiOrigin) connect.add(apiOrigin);
   for (const url of [...mapStyleUrls, ...extraMapOrigins]) {
     const origin = originOf(url);

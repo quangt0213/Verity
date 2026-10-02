@@ -6,7 +6,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default defineConfig([
-  { ignores: ["**/dist/**", "**/dist-e2e/**", "**/test-results/**", "**/node_modules/**", "**/.maypop/**", "**/coverage/**"] },
+  { ignores: ["**/dist/**", "**/dist-e2e*/**", "**/test-results/**", "**/node_modules/**", "**/.maypop/**", "**/coverage/**"] },
   js.configs.recommended,
   tseslint.configs.recommended,
   {

@@ -10,7 +10,7 @@ import { CATEGORY_DISPLAY, STATUS_DISPLAY } from "../../../lib/display";
 import { checkedText, communityReportNote, sourcesText } from "../../../lib/freshness";
 import { relativeTime, scheduleText } from "../../../lib/time";
 import { useMaypop } from "../../../maypop/MaypopProvider";
-import { useFollows } from "../../following/follows";
+import { useFollowingList, useFollowToggle } from "../../following/useFollowing";
 import { CommunitySection } from "./CommunitySection";
 import { EvidenceSection } from "./EvidenceSection";
 import { TimelineSection } from "./TimelineSection";
@@ -48,10 +48,11 @@ function VerificationNotice({ event }: { event: EventDetail }) {
 
 export function EventDetailView({ event, now }: { event: EventDetail; now: number }) {
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const { isFollowing, toggle } = useFollows();
+  const followingList = useFollowingList();
+  const toggleFollow = useFollowToggle();
   const { share } = useMaypop();
   const toast = useToast();
-  const following = isFollowing(event.id);
+  const following = followingList.data?.some((e) => e.id === event.id) ?? false;
   const category = CATEGORY_DISPLAY[event.category];
   const schedule = scheduleText(event.scheduled_start_at, event.scheduled_end_at, now);
   const note = communityReportNote(event);
@@ -73,10 +74,7 @@ export function EventDetailView({ event, now }: { event: EventDetail; now: numbe
               variant="ghost"
               size="sm"
               aria-pressed={following}
-              onClick={() => {
-                toggle(event.id);
-                toast.show(following ? "Unfollowed" : "Following. Saved on this device.", "info");
-              }}
+              onClick={() => void toggleFollow(event.id, !following)}
             >
               <Icon icon={following ? BookmarkCheck : Bookmark} size={16} />
               {following ? "Following" : "Follow"}

@@ -1,86 +1,123 @@
-import { isActiveStatus, LIMITS, type EventDetail, type StillHappeningAnswer } from "@verity/contracts";
-import { Check, CircleCheckBig, Info, MessageSquarePlus, ThumbsDown, ThumbsUp, Users } from "lucide";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  isActiveStatus,
+  LIMITS,
+  type CommunityResponseInput,
+  type EventDetail,
+  type SignalType,
+  type StillHappeningAnswer,
+} from "@verity/contracts";
+import { Check, CircleCheckBig, Info, MessageSquarePlus, ThumbsDown, ThumbsUp, Users, type IconNode } from "lucide";
 import { useId, useState, type ReactNode } from "react";
+import { useApi } from "../../../api/ApiProvider";
+import { signalTypeFor } from "../../../api/types";
 import { Button } from "../../../components/ui/Button";
 import { Icon } from "../../../components/ui/Icon";
 import { useToast } from "../../../components/ui/Toast";
 import { cn } from "../../../lib/cn";
-import { stillHappeningText } from "../../../lib/freshness";
+import { communitySummaryText } from "../../../lib/freshness";
 import { windowText } from "../../../lib/time";
-import { useCommunityResponse, type ResponseState } from "./useCommunityResponse";
+import { useAuth, useGuardedWrite } from "../../auth/AuthProvider";
+import { accountKeys } from "../../following/useFollowing";
+import { eventKeys } from "../queries";
 
-const ANSWERS: { value: StillHappeningAnswer; label: string }[] = [
-  { value: "yes", label: "Yes" },
-  { value: "no", label: "No" },
-  { value: "not_sure", label: "Not sure" },
+const ANSWERS: { value: StillHappeningAnswer; label: string; type: SignalType }[] = [
+  { value: "yes", label: "Yes", type: "STILL_HAPPENING" },
+  { value: "no", label: "No", type: "NO_LONGER_HAPPENING" },
+  { value: "not_sure", label: "Not sure", type: "NOT_SURE" },
 ];
 
-function stateLabel(state: ResponseState | undefined): string | null {
-  if (state === "sending") return "Sending…";
-  if (state === "recorded") return "Recorded";
-  if (state === "simulated") return "Demo only, not sent";
-  return null;
-}
-
-function ResponseButton({
+function AnswerButton({
   icon,
   label,
-  state,
+  activeLabel,
+  active,
+  sending,
   onClick,
+  className,
 }: {
-  icon: typeof Check;
+  icon?: IconNode;
   label: string;
-  state: ResponseState | undefined;
+  activeLabel?: string;
+  active: boolean;
+  sending: boolean;
   onClick: () => void;
+  className?: string;
 }) {
-  const status = stateLabel(state);
-  const done = state === "recorded" || state === "simulated";
   return (
     <Button
-      variant={done ? "subtle" : "secondary"}
-      size="md"
-      className="flex-1 basis-[calc(50%-0.25rem)] sm:basis-0"
-      onClick={onClick}
-      disabled={state === "sending" || done}
+      variant={active ? "subtle" : "secondary"}
+      className={cn(active && "ring-2 ring-accent", className)}
+      aria-pressed={active}
+      disabled={sending}
       aria-describedby="write-policy-note"
+      onClick={onClick}
     >
-      <Icon icon={done ? Check : icon} size={16} />
-      <span>{status ?? label}</span>
+      {(active || icon) && <Icon icon={active ? Check : icon!} size={16} />}
+      <span>{sending ? "Sending…" : active ? (activeLabel ?? label) : label}</span>
     </Button>
   );
 }
 
+/**
+ * Community answers. Each person has one current answer per question
+ * ("is this real?" and "is it still happening?"); pressing a different answer
+ * replaces theirs. Answers adjust counts only, never the event's status.
+ * Optimism is limited to the viewer's own pending answer.
+ */
 export function CommunitySection({ event }: { event: EventDetail }) {
-  const { respond, states, writePolicy } = useCommunityResponse(event.id);
+  const api = useApi();
+  const { session, available } = useAuth();
+  const guarded = useGuardedWrite();
   const toast = useToast();
+  const queryClient = useQueryClient();
+  const [pending, setPending] = useState<SignalType | "update" | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateText, setUpdateText] = useState("");
   const updateId = useId();
-  const active = isActiveStatus(event.status);
-  const summary = stillHappeningText(event.community);
-  const c = event.community;
+  const token = session?.token ?? null;
 
-  const handle = async (input: Parameters<typeof respond>[0], success: string): Promise<boolean> => {
-    const outcome = await respond(input);
-    if (outcome.ok) {
-      toast.show(outcome.simulated ? `${success} (demo only, not sent to Verity)` : success, "success");
-      return true;
+  const mine = useQuery({
+    queryKey: accountKeys.mySignals(event.id, token),
+    queryFn: ({ signal }) => api.getMySignals(event.id, signal),
+    enabled: !available || session !== null,
+  });
+  const activeAnswers = new Set<SignalType>(mine.data ?? []);
+  const active = isActiveStatus(event.status);
+  const summary = communitySummaryText(event.community);
+  const c = event.community;
+  const policy = api.writePolicy;
+
+  async function answer(input: CommunityResponseInput, success: string): Promise<boolean> {
+    setPending(signalTypeFor(input) ?? "update");
+    const result = await guarded(() => api.respond(event.id, input), "Sign in to answer");
+    setPending(null);
+    if (!result) return false; // sign-in dismissed: nothing happened, nothing to report
+    if (!result.ok) {
+      toast.show(result.error.message, "warning");
+      return false;
     }
-    // Includes the expected "auth_unavailable" refusal; the message is user-safe.
-    toast.show(outcome.error.message, "warning");
-    return false;
-  };
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: eventKeys.all }),
+      queryClient.invalidateQueries({ queryKey: ["account", "signals", event.id] }),
+    ]);
+    if (result.data.changed === false) toast.show("That's already your answer.", "info");
+    else toast.show(result.simulated ? `${success} (demo only, not sent to Verity)` : success, "success");
+    return true;
+  }
 
   let policyNote: ReactNode;
-  if (!writePolicy.enabled) {
+  if (!policy.enabled) {
     policyNote =
-      writePolicy.reason === "service_unconfigured"
-        ? "Responses aren't available because this build isn't connected to a Verity service."
-        : "Preview only: Verity can't verify accounts yet, so responses aren't recorded. Nothing you press here is saved or changes this event's status.";
-  } else if (writePolicy.simulated) {
-    policyNote = "Demo mode: responses stay in this browser tab and aren't sent anywhere. They never change an event's status.";
+      policy.reason === "service_unconfigured"
+        ? "Answers aren't available because this build isn't connected to a Verity service."
+        : "Preview only: answers aren't recorded in this demo. Nothing you press here is saved or changes this event's status.";
+  } else if (policy.simulated) {
+    policyNote = "Demo mode: answers stay in this browser tab and aren't sent anywhere. They never change an event's status.";
+  } else if (!session) {
+    policyNote = "You'll be asked to sign in with your email. Each answer is one signal; it never changes the status on its own.";
   } else {
-    policyNote = "Your response is one signal. It never changes the status on its own; Verity re-checks the evidence.";
+    policyNote = "Your answer is one signal. It never changes the event's status on its own; Verity re-checks the evidence.";
   }
 
   return (
@@ -107,61 +144,62 @@ export function CommunitySection({ event }: { event: EventDetail }) {
           <fieldset className="mt-4">
             <legend className="text-sm font-semibold">Is this still happening?</legend>
             <div className="mt-2 flex gap-2">
-              {ANSWERS.map((a) => {
-                const state = states.still_happening;
-                return (
-                  <Button
-                    key={a.value}
-                    variant="secondary"
-                    className="flex-1"
-                    disabled={state === "sending" || state === "recorded" || state === "simulated"}
-                    aria-describedby="write-policy-note"
-                    onClick={() => void handle({ kind: "still_happening", answer: a.value }, "Thanks for answering")}
-                  >
-                    {a.label}
-                  </Button>
-                );
-              })}
+              {ANSWERS.map((a) => (
+                <AnswerButton
+                  key={a.value}
+                  label={a.label}
+                  active={activeAnswers.has(a.type)}
+                  sending={pending === a.type}
+                  className="flex-1"
+                  onClick={() => void answer({ kind: "still_happening", answer: a.value }, "Thanks for answering")}
+                />
+              ))}
             </div>
-            {stateLabel(states.still_happening) && (
-              <p className="mt-1.5 text-xs text-muted" aria-live="polite">
-                {stateLabel(states.still_happening)}
-              </p>
-            )}
           </fieldset>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <ResponseButton
+            <AnswerButton
               icon={ThumbsUp}
               label="Confirm"
-              state={states.confirm}
-              onClick={() => void handle({ kind: "confirm" }, "Confirmation received")}
+              activeLabel="Confirmed"
+              active={activeAnswers.has("CONFIRM")}
+              sending={pending === "CONFIRM"}
+              className="flex-1 basis-[calc(50%-0.25rem)] sm:basis-0"
+              onClick={() => void answer({ kind: "confirm" }, "Confirmation received")}
             />
-            <ResponseButton
+            <AnswerButton
               icon={ThumbsDown}
               label="Dispute"
-              state={states.dispute}
-              onClick={() => void handle({ kind: "dispute" }, "Dispute received")}
+              activeLabel="Disputed"
+              active={activeAnswers.has("DISPUTE")}
+              sending={pending === "DISPUTE"}
+              className="flex-1 basis-[calc(50%-0.25rem)] sm:basis-0"
+              onClick={() => void answer({ kind: "dispute" }, "Dispute received")}
             />
-            <ResponseButton
+            <AnswerButton
               icon={CircleCheckBig}
               label="It's over"
-              state={states.resolved}
-              onClick={() => void handle({ kind: "resolved" }, "Thanks, Verity will re-check")}
-            />
-            <Button
-              variant="secondary"
+              activeLabel="Marked as over"
+              active={activeAnswers.has("NO_LONGER_HAPPENING")}
+              sending={pending === "NO_LONGER_HAPPENING"}
               className="flex-1 basis-[calc(50%-0.25rem)] sm:basis-0"
-              aria-expanded={updateOpen}
-              aria-controls={updateId}
-              onClick={() => setUpdateOpen((v) => !v)}
-            >
-              <Icon icon={MessageSquarePlus} size={16} />
-              Add update
-            </Button>
+              onClick={() => void answer({ kind: "resolved" }, "Thanks, Verity will re-check")}
+            />
+            {api.supportsUpdates && (
+              <Button
+                variant="secondary"
+                className="flex-1 basis-[calc(50%-0.25rem)] sm:basis-0"
+                aria-expanded={updateOpen}
+                aria-controls={updateId}
+                onClick={() => setUpdateOpen((v) => !v)}
+              >
+                <Icon icon={MessageSquarePlus} size={16} />
+                Add update
+              </Button>
+            )}
           </div>
 
-          {updateOpen && (
+          {api.supportsUpdates && updateOpen && (
             <form
               id={updateId}
               className="mt-3"
@@ -169,8 +207,7 @@ export function CommunitySection({ event }: { event: EventDetail }) {
                 e.preventDefault();
                 const text = updateText.trim();
                 if (!text) return;
-                const ok = await handle({ kind: "update", text }, "Update received");
-                if (ok) {
+                if (await answer({ kind: "update", text }, "Update received")) {
                   setUpdateText("");
                   setUpdateOpen(false);
                 }
@@ -192,8 +229,8 @@ export function CommunitySection({ event }: { event: EventDetail }) {
                 <span className="text-xs text-muted">
                   {updateText.length}/{LIMITS.updateTextMax}
                 </span>
-                <Button type="submit" size="sm" disabled={!updateText.trim() || states.update === "sending"}>
-                  {states.update === "sending" ? "Sending…" : "Send update"}
+                <Button type="submit" size="sm" disabled={!updateText.trim() || pending === "update"}>
+                  {pending === "update" ? "Sending…" : "Send update"}
                 </Button>
               </div>
             </form>
@@ -205,7 +242,7 @@ export function CommunitySection({ event }: { event: EventDetail }) {
         id="write-policy-note"
         className={cn(
           "mt-3 flex items-start gap-2 rounded-xl px-3 py-2 text-xs",
-          writePolicy.enabled ? "bg-surface-2 text-muted" : "bg-amber-50 text-amber-900 dark:bg-amber-400/10 dark:text-amber-200",
+          policy.enabled ? "bg-surface-2 text-muted" : "bg-amber-50 text-amber-900 dark:bg-amber-400/10 dark:text-amber-200",
         )}
       >
         <Icon icon={Info} size={14} className="mt-0.5 shrink-0" />

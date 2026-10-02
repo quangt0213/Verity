@@ -11,6 +11,8 @@ const PORT = 4179;
  */
 export default defineConfig({
   testDir: "e2e",
+  // The service suite has its own config (playwright.service.config.ts).
+  testIgnore: ["service/**"],
   timeout: 60_000,
   retries: 0,
   reporter: [["list"]],

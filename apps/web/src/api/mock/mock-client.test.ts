@@ -118,11 +118,12 @@ describe("mock writes", () => {
     expect(result).toMatchObject({ ok: true, data: { outcome: "attached_to_existing", event_id: demoEventId(101) } });
   });
 
-  it("allows one confirmation per event and never changes status from community input", async () => {
+  it("keeps one answer per question, lets a new answer replace it, and never changes status", async () => {
     const api = createMockApi({ writes: "simulate", latencyMs: [0, 0], now: () => NOW });
     const before = await api.getEvent(demoEventId(102));
-    expect(await api.respond(demoEventId(102), { kind: "confirm" })).toMatchObject({ ok: true });
-    expect(await api.respond(demoEventId(102), { kind: "confirm" })).toMatchObject({ ok: false, error: { code: "conflict" } });
+    expect(await api.respond(demoEventId(102), { kind: "confirm" })).toMatchObject({ ok: true, data: { changed: true } });
+    expect(await api.respond(demoEventId(102), { kind: "confirm" })).toMatchObject({ ok: true, data: { changed: false } });
+    expect(await api.getMySignals(demoEventId(102))).toEqual(["CONFIRM"]);
     for (let i = 0; i < 5; i++) await api.respond(demoEventId(102), { kind: "update", text: `Still flooded ${i}` });
     const after = await api.getEvent(demoEventId(102));
     expect(after.community_confirmation_count).toBe(before.community_confirmation_count + 1);

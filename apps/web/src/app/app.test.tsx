@@ -57,9 +57,9 @@ describe("report flow", () => {
     expect(screen.getByText(/not an IP address/)).toBeInTheDocument();
   });
 
-  it("submits nothing while account verification is unavailable", async () => {
+  it("submits nothing when demo writes are off", async () => {
     renderWithApp(<></>, { routes, path: "/report", api: fastMockApi("off") });
-    expect(await screen.findByText(/Reporting isn't available yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/Reporting is off in this demo/)).toBeInTheDocument();
     await fillValidReport();
     await userEvent.click(screen.getByRole("button", { name: "Submit report" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/Not recorded/);

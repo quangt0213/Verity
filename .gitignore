@@ -27,3 +27,7 @@ Thumbs.db
 apps/web/dist-e2e/
 apps/web/test-results/
 apps/web/playwright-report/
+
+# Verity service local state (embedded dev database, dev email outbox)
+apps/api/.data/
+apps/web/dist-e2e-service/

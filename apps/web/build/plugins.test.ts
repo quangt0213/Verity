@@ -40,6 +40,10 @@ describe("buildCsp", () => {
     );
   });
 
+  it("refuses IPv6-literal API URLs, which CSP cannot express", () => {
+    expect(() => buildCsp({ apiUrl: "http://[::1]:8788", mapStyleUrls: [], extraMapOrigins: [] })).toThrow(/IPv6/);
+  });
+
   it("forbids inline/eval scripts, plugins and framing other sites", () => {
     expect(csp).toContain("script-src 'self' https://*.maypop.ai");
     expect(csp).not.toContain("unsafe-eval");

@@ -1,4 +1,5 @@
 export type ReadErrorCode =
+  | "auth_required"
   | "not_found"
   | "rate_limited"
   | "unavailable"
@@ -31,9 +32,12 @@ export function userMessageFor(error: unknown): string {
         return "Too many requests. Please wait a moment and try again.";
       case "network":
       case "timeout":
-        return "Couldn't reach Verity. Check your connection and try again.";
       case "unavailable":
-        return "Verity is temporarily unavailable. Please try again shortly.";
+      case "internal":
+      case "invalid_response":
+        return "Verity is temporarily unavailable.";
+      case "auth_required":
+        return "Sign in to see this.";
       case "unconfigured":
         return "This build isn't connected to a Verity service.";
       default:

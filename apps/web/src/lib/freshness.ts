@@ -72,3 +72,19 @@ export function stillHappeningText(c: CommunitySummary): string | null {
   }
   return `${people(not_sure)} ${not_sure === 1 ? "wasn't" : "weren't"} sure ${when}.`;
 }
+
+/**
+ * One-line community summary: "still happening" answers when there are any,
+ * otherwise recent confirmations or disputes. Counts only, never identities.
+ */
+export function communitySummaryText(c: CommunitySummary): string | null {
+  const happening = stillHappeningText(c);
+  if (happening) return happening;
+  const when = windowText(c.window_minutes);
+  if (c.recent_confirmations > 0 && c.recent_disputes === 0) return `${people(c.recent_confirmations)} confirmed this ${when}.`;
+  if (c.recent_disputes > 0 && c.recent_confirmations === 0) return `${people(c.recent_disputes)} disputed this ${when}.`;
+  if (c.recent_confirmations > 0 && c.recent_disputes > 0) {
+    return `Mixed answers ${when}: ${people(c.recent_confirmations)} confirmed, ${people(c.recent_disputes)} disputed.`;
+  }
+  return null;
+}

@@ -26,7 +26,8 @@ export interface RawPublicEnv {
   VITE_DEFAULT_ZOOM?: string;
 }
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const LOCAL_HOSTS = new Set(["localhost", "[::1]"]);
+const isLoopback = (host: string) => LOCAL_HOSTS.has(host) || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 
 /** Validate the Verity service URL: absolute, no credentials, https outside local development. */
 export function parseApiBaseUrl(raw: string, allowInsecureLocal: boolean): string | { error: string } {
@@ -38,7 +39,7 @@ export function parseApiBaseUrl(raw: string, allowInsecureLocal: boolean): strin
   }
   if (url.username || url.password) return { error: "VITE_VERITY_API_URL must not contain credentials" };
   if (url.search || url.hash) return { error: "VITE_VERITY_API_URL must not contain a query or fragment" };
-  const isLocal = LOCAL_HOSTS.has(url.hostname);
+  const isLocal = isLoopback(url.hostname);
   if (url.protocol !== "https:" && !(allowInsecureLocal && isLocal && url.protocol === "http:")) {
     return { error: "VITE_VERITY_API_URL must use https" };
   }
@@ -75,7 +76,7 @@ function parseZoom(raw: string | undefined): number {
  *  - neither, development server           → demo data for convenience
  *  - neither, production build             → "unconfigured"; never silently shows demo data
  */
-export function resolveConfig(env: RawPublicEnv, isDev: boolean): AppConfig {
+export function resolveConfig(env: RawPublicEnv, isDev: boolean, allowInsecureLocalApi = isDev): AppConfig {
   let dataSource: DataSourceConfig;
   const explicit = env.VITE_VERITY_DATA_SOURCE?.trim().toLowerCase();
   const mockWrites = env.VITE_MOCK_WRITES?.trim().toLowerCase();
@@ -85,7 +86,7 @@ export function resolveConfig(env: RawPublicEnv, isDev: boolean): AppConfig {
   if (explicit === "mock") {
     dataSource = { kind: "mock", writes };
   } else if (env.VITE_VERITY_API_URL?.trim()) {
-    const parsed = parseApiBaseUrl(env.VITE_VERITY_API_URL.trim(), isDev);
+    const parsed = parseApiBaseUrl(env.VITE_VERITY_API_URL.trim(), allowInsecureLocalApi);
     dataSource = typeof parsed === "string" ? { kind: "api", baseUrl: parsed } : { kind: "unconfigured", reason: parsed.error };
   } else if (isDev) {
     dataSource = { kind: "mock", writes };
@@ -103,4 +104,9 @@ export function resolveConfig(env: RawPublicEnv, isDev: boolean): AppConfig {
   };
 }
 
-export const appConfig: AppConfig = resolveConfig(import.meta.env as RawPublicEnv, import.meta.env.DEV);
+// "e2e" builds may target a plain-http local service; production builds never can.
+export const appConfig: AppConfig = resolveConfig(
+  import.meta.env as RawPublicEnv,
+  import.meta.env.DEV,
+  import.meta.env.DEV || import.meta.env.MODE === "e2e",
+);

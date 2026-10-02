@@ -4,6 +4,7 @@ import { createApi } from "../api";
 import { ApiProvider } from "../api/ApiProvider";
 import { ToastProvider } from "../components/ui/Toast";
 import { appConfig } from "../config/env";
+import { AuthProvider } from "../features/auth/AuthProvider";
 import { MaypopProvider } from "../maypop/MaypopProvider";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { router } from "./router";
@@ -23,7 +24,9 @@ export function App() {
         <MaypopProvider>
           <ThemeProvider>
             <ToastProvider>
-              <RouterProvider router={router} />
+              <AuthProvider>
+                <RouterProvider router={router} />
+              </AuthProvider>
             </ToastProvider>
           </ThemeProvider>
         </MaypopProvider>

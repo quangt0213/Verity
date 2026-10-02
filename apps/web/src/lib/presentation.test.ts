@@ -1,7 +1,7 @@
 import { EVENT_STATUSES, type CommunitySummary, type EventSummary } from "@verity/contracts";
 import { describe, expect, it } from "vitest";
 import { MARKER_GROUPS, markerGroup, STATUS_DISPLAY } from "./display";
-import { checkedText, communityReportNote, freshnessLine, sourcesText, stillHappeningText } from "./freshness";
+import { checkedText, communityReportNote, communitySummaryText, freshnessLine, sourcesText, stillHappeningText } from "./freshness";
 import { relativeTime, scheduleText } from "./time";
 
 const NOW = Date.parse("2026-10-01T15:00:00Z");
@@ -98,6 +98,13 @@ describe("community wording is aggregate-only", () => {
       "Mixed answers in the last hour: 2 people said yes, 1 person said no.",
     );
     expect(stillHappeningText({ ...base, still_happening: { yes: 0, no: 0, not_sure: 0 } })).toBeNull();
+  });
+
+  it("falls back to confirmations and disputes when nobody answered 'still happening'", () => {
+    const none = { ...base, still_happening: { yes: 0, no: 0, not_sure: 0 } };
+    expect(communitySummaryText({ ...none, recent_confirmations: 1 })).toBe("1 person confirmed this in the last hour.");
+    expect(communitySummaryText({ ...none, recent_confirmations: 0, recent_disputes: 2 })).toBe("2 people disputed this in the last hour.");
+    expect(communitySummaryText({ ...none, recent_confirmations: 0 })).toBeNull();
   });
 });
 

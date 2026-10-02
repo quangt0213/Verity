@@ -54,19 +54,22 @@ no JWKS, token-introspection or "verify this viewer" endpoint is documented. The
 internal app token is not part of the public contract, and using it would mean
 relying on undocumented behavior.
 
-### Decision: authenticated writes stop at the boundary
+### Decision: Maypop identity is display-only; Verity has its own sign-in
 
-- Verity uses Maypop identity for **display only** (name, avatar, sign-in
-  prompt). It is never sent to the Verity service and never authorizes anything.
-- The HTTP client's write methods (report, confirm, dispute, resolved, still
-  happening, update) return `auth_unavailable` **without contacting the
-  network** (`apps/web/src/api/http-client.ts`). The UI explains that responses
-  aren't recorded.
-- Reads (events, details, evidence) are public and need no identity.
-- A separate, verifiable authentication mechanism for the Verity service will be
-  designed in a later phase. Options to evaluate then: a proven auth provider
-  with bearer tokens obtained via a popup (the sandbox allows popups), or a
-  Maypop-documented assertion if one becomes available.
+- **Phase 1** stopped authenticated writes at this boundary rather than trust
+  an unverifiable identity.
+- **Phase 2** added Verity's own passwordless authentication: email, then a
+  6-digit code, then a signed bearer token (see SECURITY.md).
+- **MaypopProfile** (name, avatar, app-scoped id) is shown in the UI only. It is
+  never sent to the Verity service, never authorizes anything, and is **never
+  linked** to a Verity account, because the link couldn't be proven.
+- **VerityIdentity** (an internal user id from a verified session) authorizes
+  every write.
+- Browsing needs no account. The sign-in dialog appears only when someone tries
+  to contribute, and the attempted action resumes afterwards.
+- If Maypop ever documents a verifiable assertion (for example a signed token
+  with a published key set), Verity could accept it as an additional login
+  method. Until then, no link is made.
 
 ### Why the MCP route doesn't solve identity
 

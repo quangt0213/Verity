@@ -6,6 +6,7 @@ import { ApiProvider } from "../api/ApiProvider";
 import { createMockApi } from "../api/mock/mock-client";
 import type { VerityApi } from "../api/types";
 import { ToastProvider } from "../components/ui/Toast";
+import { AuthProvider } from "../features/auth/AuthProvider";
 import { MaypopProvider } from "../maypop/MaypopProvider";
 import { STANDALONE } from "../maypop/session";
 import { ThemeProvider } from "../theme/ThemeProvider";
@@ -29,7 +30,9 @@ export function renderWithApp(
         <MaypopProvider connect={standalone}>
           <ThemeProvider>
             <ToastProvider>
-              <RouterProvider router={router} />
+              <AuthProvider>
+                <RouterProvider router={router} />
+              </AuthProvider>
             </ToastProvider>
           </ThemeProvider>
         </MaypopProvider>

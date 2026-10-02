@@ -1,19 +1,23 @@
 import { useQueries } from "@tanstack/react-query";
-import { toEventSummary, type EventDetail, type TimelineEntry } from "@verity/contracts";
-import { Bookmark } from "lucide";
+import type { EventDetail, TimelineEntry } from "@verity/contracts";
+import { Bookmark, LogIn } from "lucide";
 import { Link } from "react-router";
 import { useApi } from "../../api/ApiProvider";
+import { userMessageFor } from "../../api/errors";
 import { Card, PageLayout } from "../../app/PageLayout";
-import { EmptyState, EventCardSkeleton } from "../../components/ui/States";
+import { Button } from "../../components/ui/Button";
+import { Icon } from "../../components/ui/Icon";
+import { EmptyState, ErrorState, EventCardSkeleton } from "../../components/ui/States";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useNow } from "../../lib/hooks";
 import { relativeTime } from "../../lib/time";
+import { useAuth } from "../auth/AuthProvider";
 import { EventCard } from "../events/EventCard";
 import { eventKeys } from "../events/queries";
-import { useFollows } from "./follows";
+import { useFollowingList } from "./useFollowing";
 
 const MEANINGFUL: TimelineEntry["kind"][] = ["status_changed", "contradiction_found", "verification_unavailable"];
-const MAX_SHOWN = 50;
+const MAX_DETAILS = 50;
 
 interface Change {
   event: EventDetail;
@@ -31,94 +35,101 @@ export function meaningfulChanges(events: EventDetail[], limit = 10): Change[] {
 export function FollowingPage() {
   const api = useApi();
   const now = useNow();
-  const { follows } = useFollows();
-  const ids = follows.slice(0, MAX_SHOWN);
-  const results = useQueries({
-    queries: ids.map((id) => ({
-      queryKey: eventKeys.detail(id),
-      queryFn: ({ signal }: { signal: AbortSignal }) => api.getEvent(id, signal),
+  const { available, session, requestSignIn } = useAuth();
+  const list = useFollowingList();
+  const followed = list.data ?? [];
+  const details = useQueries({
+    queries: followed.slice(0, MAX_DETAILS).map((e) => ({
+      queryKey: eventKeys.detail(e.id),
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.getEvent(e.id, signal),
       retry: false,
     })),
   });
-  const loaded = results.flatMap((r) => (r.data ? [r.data] : []));
-  const pending = results.some((r) => r.isPending);
-  const missing = results.filter((r) => r.isError).length;
+  const loaded = details.flatMap((r) => (r.data ? [r.data] : []));
   const changes = meaningfulChanges(loaded);
+  const where = available ? "Follows are saved to your Verity account." : "Follows are saved on this device.";
 
-  return (
-    <PageLayout title="Following" description="Events you follow and how Verity's understanding of them changed.">
-      {ids.length === 0 ? (
-        <Card>
-          <EmptyState icon={Bookmark} title="You're not following anything yet">
-            Open an event and tap <span className="font-medium text-fg">Follow</span> to keep track of it here.
-          </EmptyState>
-        </Card>
-      ) : (
-        <div className="space-y-6">
-          <section aria-labelledby="activity-heading">
-            <h2 id="activity-heading" className="text-base font-semibold">
-              Recent changes
-            </h2>
-            {pending && loaded.length === 0 ? (
-              <div className="mt-2">
-                <EventCardSkeleton />
-              </div>
-            ) : changes.length === 0 ? (
-              <p className="mt-2 text-sm text-muted">No status changes yet for the events you follow.</p>
-            ) : (
-              <ul className="mt-2 divide-y divide-line rounded-2xl bg-surface ring-1 ring-line">
-                {changes.map(({ event, entry }) => (
-                  <li key={entry.id}>
-                    <Link to={`/events/${event.id}`} className="block px-4 py-3 hover:bg-surface-2">
-                      <p className="text-sm font-medium">{event.title}</p>
-                      <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-                        {entry.to_status ? (
-                          <>
-                            {entry.from_status && <StatusBadge status={entry.from_status} className="opacity-70" />}
-                            {entry.from_status && <span aria-hidden>→</span>}
-                            <StatusBadge status={entry.to_status} />
-                          </>
-                        ) : (
-                          <span className="text-fg">{entry.label}</span>
-                        )}
-                        <span>· {relativeTime(entry.at, now)}</span>
-                      </p>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section aria-labelledby="followed-heading">
-            <h2 id="followed-heading" className="text-base font-semibold">
-              Followed events ({ids.length})
-            </h2>
-            <ul className="mt-2 space-y-2.5">
-              {pending && loaded.length === 0 && (
-                <li>
-                  <EventCardSkeleton />
-                </li>
-              )}
-              {loaded.map((event) => (
-                <li key={event.id}>
-                  <EventCard event={toEventSummary(event)} now={now} />
+  let body;
+  if (available && !session) {
+    body = (
+      <Card>
+        <EmptyState icon={Bookmark} title="Sign in to see events you follow">
+          <p>Following keeps track of how Verity's understanding of an event changes.</p>
+          <Button className="mt-4" onClick={() => void requestSignIn("Sign in to follow events")}>
+            <Icon icon={LogIn} size={16} />
+            Sign in
+          </Button>
+        </EmptyState>
+      </Card>
+    );
+  } else if (list.isPending) {
+    body = <EventCardSkeleton />;
+  } else if (list.isError) {
+    body = <ErrorState message={userMessageFor(list.error)} onRetry={() => void list.refetch()} />;
+  } else if (followed.length === 0) {
+    body = (
+      <Card>
+        <EmptyState icon={Bookmark} title="You're not following anything yet">
+          Open an event and tap <span className="font-medium text-fg">Follow</span> to keep track of it here.
+        </EmptyState>
+      </Card>
+    );
+  } else {
+    body = (
+      <div className="space-y-6">
+        <section aria-labelledby="activity-heading">
+          <h2 id="activity-heading" className="text-base font-semibold">
+            Recent changes
+          </h2>
+          {changes.length === 0 ? (
+            <p className="mt-2 text-sm text-muted">No status changes yet for the events you follow.</p>
+          ) : (
+            <ul className="mt-2 divide-y divide-line rounded-2xl bg-surface ring-1 ring-line">
+              {changes.map(({ event, entry }) => (
+                <li key={entry.id}>
+                  <Link to={`/events/${event.id}`} className="block px-4 py-3 hover:bg-surface-2">
+                    <p className="text-sm font-medium">{event.title}</p>
+                    <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                      {entry.to_status ? (
+                        <>
+                          {entry.from_status && <StatusBadge status={entry.from_status} className="opacity-70" />}
+                          {entry.from_status && <span aria-hidden>→</span>}
+                          <StatusBadge status={entry.to_status} />
+                        </>
+                      ) : (
+                        <span className="text-fg">{entry.label}</span>
+                      )}
+                      <span>· {relativeTime(entry.at, now)}</span>
+                    </p>
+                  </Link>
                 </li>
               ))}
             </ul>
-            {missing > 0 && (
-              <p className="mt-2 text-xs text-muted">
-                {missing} followed event{missing === 1 ? "" : "s"} couldn't be loaded. {missing === 1 ? "It" : "They"} may have been removed.
-              </p>
-            )}
-          </section>
+          )}
+        </section>
 
-          <p className="text-xs text-muted">
-            Follows are saved on this device. Alerts for meaningful changes (for example Developing → Verified) will arrive once the Verity
-            service is connected.
-          </p>
-        </div>
-      )}
+        <section aria-labelledby="followed-heading">
+          <h2 id="followed-heading" className="text-base font-semibold">
+            Followed events ({followed.length})
+          </h2>
+          <ul className="mt-2 space-y-2.5">
+            {followed.map((event) => (
+              <li key={event.id}>
+                <EventCard event={event} now={now} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <PageLayout title="Following" description="Events you follow and how Verity's understanding of them changed.">
+      {body}
+      <p className="mt-6 text-xs text-muted">
+        {where} Alerts for meaningful changes (for example Developing → Verified) will arrive in a later release.
+      </p>
     </PageLayout>
   );
 }

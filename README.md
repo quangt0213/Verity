@@ -9,123 +9,148 @@ and when Verity last checked. Statuses describe the evidence (Unverified,
 Developing, Likely, Verified, Conflicting, Stale, Resolved, Not supported),
 never a fake confidence percentage.
 
-The competition-facing app runs on **Maypop** as a static frontend. A separate
-**Verity service** (built in later phases) will own Postgres, the Nimble and
-RawTree credentials, verification and every security-sensitive decision.
+The app has two parts:
+
+- **The frontend** runs on **Maypop** as a static app.
+- **The Verity service** is deployed separately. It owns the canonical state in
+  Postgres, Verity's own authentication, validation, rate limits and the
+  verification outbox. Nimble and RawTree come in later phases.
 
 | Doc | Contents |
 | --- | --- |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | System design, data contract, map, verification engine, Nimble/RawTree plans |
-| [SECURITY.md](SECURITY.md) | Protections in place, auth boundary, SSRF, XSS, CSP, privacy, remaining risks |
-| [docs/MAYPOP.md](docs/MAYPOP.md) | What Maypop actually provides, and why writes are disabled for now |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System design, data model, API, auth model, state machine, Nimble/RawTree plans |
+| [SECURITY.md](SECURITY.md) | Protections in place, cookie/CORS/CSRF analysis, privacy, remaining risks |
+| [docs/MAYPOP.md](docs/MAYPOP.md) | What Maypop provides, and why its identity is display-only |
 
 ## Status
 
 | Phase | Scope | State |
 | --- | --- | --- |
-| 1 | Maypop frontend: map, feed, detail, evidence UI, report UI, themes, mobile, API client, demo adapter | **Done** |
-| 2+ | Verity service: Postgres, auth, reports and confirmations, Nimble, verification engine, RawTree, notifications | Next |
+| 1 | Maypop frontend: map, feed, detail, evidence UI, report UI, themes, mobile, demo adapter | Done |
+| 2 | Verity service: Postgres, passwordless auth, reports, community signals, follows, transitions, outbox | **Done** |
+| 3+ | Nimble investigations, verification engine, RawTree history, notifications | Next |
 
 ## Requirements
 
 - Node.js 22 or newer (developed on Node 24), npm 11
-- Optional: the [Maypop CLI](https://github.com/basilica-digital/maypop-cli) to publish
-- Optional: Chrome or Edge for the end-to-end tests (or `npx playwright install chromium`)
+- **No database server needed for development:** the service uses embedded
+  Postgres (PGlite). Production uses any Postgres 14+.
+- Optional: the [Maypop CLI](https://github.com/basilica-digital/maypop-cli) to publish the frontend
+- Optional: Chrome or Edge for end-to-end tests (or `npx playwright install chromium`)
 
-## Setup and run
+## Run locally
 
 ```sh
 npm install
-npm run dev            # http://localhost:5173, inside a local Maypop host
+
+# Demo frontend only (labeled demo data, inside a local Maypop host):
+npm run dev                                  # http://localhost:5173
+
+# Frontend against the real Verity service:
+npm run db:seed -w @verity/api               # optional, before starting: load labeled demo events
+npm run dev:api                              # service on http://localhost:8787 (embedded DB)
+# then, in another terminal:
+VITE_VERITY_DATA_SOURCE=api VITE_VERITY_API_URL=http://localhost:8787 npm run dev            # bash
+$env:VITE_VERITY_DATA_SOURCE="api"; $env:VITE_VERITY_API_URL="http://localhost:8787"; npm run dev   # PowerShell
 ```
 
-`npm run dev` uses labeled **demo data** and wraps the app in the Maypop SDK's
-local host (local identity, KV and notification inspector). To run standalone
-instead:
+**Signing in locally:** nothing is emailed in development. Each sign-in code is
+written as a file to `apps/api/.data/dev-outbox/` (git-ignored); open the
+newest one. Codes are never written to logs.
 
-```sh
-MAYPOP_DEV_HOST=off npm run dev                   # bash
-$env:MAYPOP_DEV_HOST="off"; npm run dev           # PowerShell
-```
+To start the dev database over: `npm run db:reset -w @verity/api`. The embedded
+database is single-process, so stop the dev service before seeding or resetting.
 
 ### Configuration
 
-Copy `apps/web/.env.example` to `apps/web/.env.local`. Every value is
-**public**, because `VITE_*` variables are compiled into the bundle. The build
-refuses secret-looking names.
-
-| Variable | Purpose |
+| File | What goes there |
 | --- | --- |
-| `VITE_VERITY_DATA_SOURCE` | `api` or `mock`. Empty means demo data in dev, and "not connected" in builds. |
-| `VITE_VERITY_API_URL` | Verity service base URL (https) |
-| `VITE_MOCK_WRITES` | Demo only: `simulate` or `off` |
-| `VITE_MAP_STYLE_URL_LIGHT` / `_DARK` | MapLibre style URLs. Default: OpenFreeMap (OSM-derived, no key). |
-| `VITE_MAP_EXTRA_ORIGINS` | Extra basemap origins for the CSP |
-| `VITE_DEFAULT_CENTER` / `VITE_DEFAULT_ZOOM` | Initial view (`lat,lng`) |
-
-Server secrets (`NIMBLE_API_KEY`, `RAWTREE_API_KEY`, `RAWTREE_DATABASE`,
-`DATABASE_URL`, `SESSION_SECRET`) are listed in the root `.env.example` for the
-Verity service. They are **never** used by the frontend.
+| `apps/api/.env` (git-ignored; template `apps/api/.env.example`) | **Server-side secrets and settings.** Every value is optional in development. |
+| `apps/web/.env.local` / `.env.production.local` (template `apps/web/.env.example`) | **Public** `VITE_*` values only. The build refuses secret-looking names and scans the bundle for secrets. |
 
 ## Test
 
 ```sh
 npm run typecheck       # all workspaces
 npm run lint            # ESLint (incl. a11y and a ban on raw-HTML rendering)
-npm test                # Vitest: contracts and frontend
-npm run check           # all of the above plus a production build
+npm test                # Vitest: contracts, service (against embedded Postgres), frontend
+npm run check           # all of the above plus production builds
 
-# End-to-end, against the production bundle in demo mode:
 cd apps/web
-PW_CHANNEL=chrome npx playwright test     # or PW_CHANNEL=msedge, or install bundled Chromium
-E2E_OFFLINE=1 npx playwright test         # skip map-render checks without network
+PW_CHANNEL=chrome npm run test:e2e           # demo-mode production bundle: map, themes, mobile, CSP
+PW_CHANNEL=chrome npm run test:e2e:service   # Phase 2 completion flow against the real service
 ```
 
-The tests cover:
+`test:e2e:service` runs the frontend inside a cross-site sandboxed iframe (like
+Maypop) against the real service, using two separate accounts. It walks
+through:
 
-- **Validation:** coordinates, lengths, unknown fields, URLs.
-- **SSRF:** loopback, RFC 1918, metadata, IPv6 and numeric-IP tricks.
-- **XSS:** hostile titles, quotes and links render harmlessly.
-- **Auth boundary:** writes are never sent; client-supplied identity fields are
-  rejected.
-- **Honesty:** demo reports never become verified, and nothing is fabricated
-  when verification is unavailable.
-- **Source lineage:** copied sources don't count as independent.
-- **Duplicates:** near-identical reports merge.
-- **Graceful degradation:** the list still works when the map can't load.
-- **Browser (Playwright):** the production bundle shows no CSP violations, and
-  the map really renders markers in light and dark, on desktop and mobile.
+1. Browse without signing in.
+2. Try to report, and get the sign-in prompt.
+3. Sign in by email code.
+4. The report is stored, the event shows as UNVERIFIED, and a verification job
+   is queued.
+5. A second account confirms; the count updates but the event stays UNVERIFIED.
+6. Follow the event.
+7. Reload: everything persisted.
 
-## Build and publish to Maypop
+It also checks that no request ever carried Maypop identity.
+
+## Deploy
+
+### Verity service (`apps/api`)
+
+It's a provider-neutral Node 22+ service: run it on any container host or Node
+platform, with any managed Postgres.
 
 ```sh
-npm run build           # → apps/web/dist (relative asset paths, CSP meta, secret scan)
+npm ci && npm run build -w @verity/api       # → apps/api/dist/{server,migrate}.js
+node apps/api/dist/migrate.js                # apply migrations (or set MIGRATE_ON_START=true)
+node apps/api/dist/server.js                 # cwd apps/api, so ./drizzle is found
 ```
 
-`maypop.toml` builds only the frontend. `maypop publish` builds locally, so
-public build values come from `apps/web/.env.production.local`:
+A container build is in `apps/api/Dockerfile` (build from the repo root; not
+yet exercised in CI).
+
+**Required production settings:**
+
+| Variable | Value |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `DATABASE_URL` | Postgres URL |
+| `SESSION_SECRET` | 32+ random characters |
+| `VERITY_PUBLIC_URL` | The service's https URL |
+| `VERITY_ALLOWED_ORIGINS` | The exact Maypop app origin |
+| `SMTP_URL` and `AUTH_EMAIL_FROM` | For sign-in codes |
+
+Set `TRUST_PROXY` when the service runs behind a load balancer. The service
+refuses to start if production settings are insecure.
+
+### Frontend (Maypop)
+
+`maypop.toml` builds only `apps/web`. `maypop publish` builds locally, so set
+the public values in `apps/web/.env.production.local`:
 
 ```sh
-# Before the Verity service exists: an honestly labeled demo
-echo VITE_VERITY_DATA_SOURCE=mock > apps/web/.env.production.local
-
-maypop auth
-maypop init             # once, in the repo root (reads maypop.toml)
-git add -A && git commit -m "..."
-maypop publish
+VITE_VERITY_DATA_SOURCE=api
+VITE_VERITY_API_URL=https://<your-verity-service>
 ```
 
-After the first publish, check in the Maypop app that:
+Then run `maypop auth`, `maypop init` (once, from the repo root), commit, and
+`maypop publish`.
 
-1. tiles and the map load (the meta CSP fits Maypop's host); and
-2. you note the app's origin, which the Verity service's CORS allowlist needs.
+**After the first publish:**
 
-See [SECURITY.md](SECURITY.md) under remaining risks.
+1. Add the Maypop app's exact origin to `VERITY_ALLOWED_ORIGINS` on the service.
+2. In the published app, test the full flow on real Maypop: browse, sign in,
+   report, confirm and follow. See SECURITY.md under remaining risks.
 
 ## Repository layout
 
 ```
-packages/contracts/   Shared Zod API contract and limits (frontend now, service later)
+packages/contracts/   Shared Zod API contract, limits, demo fixtures (frontend + service)
 apps/web/             Maypop static app (Vite, React 19, Tailwind 4, MapLibre 6)
+apps/api/             Verity service (Fastify 5, Drizzle + Postgres/PGlite, Better Auth)
+  drizzle/            SQL migrations (schema + integrity triggers)
 docs/                 Platform research notes
 ```

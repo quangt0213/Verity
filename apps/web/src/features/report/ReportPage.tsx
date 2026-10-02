@@ -19,6 +19,7 @@ import { cn } from "../../lib/cn";
 import { CATEGORY_DISPLAY } from "../../lib/display";
 import { approximateCoordinates } from "../../lib/geo";
 import { useTheme } from "../../theme/ThemeProvider";
+import { useAuth, useGuardedWrite } from "../auth/AuthProvider";
 import { LocationPicker } from "./LocationPicker";
 
 type FieldErrors = Partial<Record<"category" | "title" | "description" | "location" | "source_url" | "form", string>>;
@@ -53,6 +54,8 @@ export function ReportPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const policy = api.writePolicy;
+  const { session } = useAuth();
+  const guarded = useGuardedWrite();
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -77,8 +80,11 @@ export function ReportPage() {
     }
     setErrors({});
     setSubmitting(true);
-    const result = await api.reportEvent(payload as Parameters<typeof api.reportEvent>[0]);
+    // If sign-in is needed, the dialog opens and the same report is submitted
+    // right after; the form keeps everything that was typed.
+    const result = await guarded(() => api.reportEvent(payload as Parameters<typeof api.reportEvent>[0]), "Sign in to submit your report");
     setSubmitting(false);
+    if (!result) return;
 
     if (!result.ok) {
       if (result.error.fields) {
@@ -106,8 +112,14 @@ export function ReportPage() {
           <span>
             {policy.reason === "service_unconfigured"
               ? "Reporting isn't available because this build isn't connected to a Verity service."
-              : "Reporting isn't available yet: Verity can't verify accounts, so reports can't be accepted. You can preview the form, but nothing will be submitted."}
+              : "Reporting is off in this demo. You can preview the form, but nothing will be submitted."}
           </span>
+        </div>
+      )}
+      {policy.enabled && policy.requiresSignIn && !session && (
+        <div className="mb-4 flex items-start gap-2 rounded-xl bg-surface-2 px-3 py-2.5 text-sm text-muted" role="note">
+          <Icon icon={Info} size={16} className="mt-0.5 shrink-0" />
+          <span>You'll be asked to sign in with your email when you submit. Browsing never needs an account.</span>
         </div>
       )}
       {policy.enabled && policy.simulated && (

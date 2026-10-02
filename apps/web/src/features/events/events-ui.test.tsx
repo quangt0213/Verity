@@ -93,19 +93,22 @@ describe("EvidenceSection", () => {
 });
 
 describe("CommunitySection", () => {
-  it("explains that responses aren't recorded while identity can't be verified", async () => {
+  it("explains that answers aren't recorded when demo writes are off", async () => {
     renderWithApp(<CommunitySection event={highway} />, { api: fastMockApi("off") });
-    expect(screen.getByText(/Verity can't verify accounts yet/)).toBeInTheDocument();
+    expect(screen.getByText(/answers aren't recorded in this demo/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
     expect(await screen.findByText(/Not recorded/)).toBeInTheDocument();
-    // The button returns to its normal state; nothing pretends to be saved.
-    expect(screen.getByRole("button", { name: "Confirm" })).toBeEnabled();
+    // Nothing pretends to be saved.
+    expect(screen.getByRole("button", { name: "Confirm" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("shows the viewer's own simulated response without changing status", async () => {
+  it("shows the viewer's own answer, lets them change it, and never changes status", async () => {
     renderWithApp(<CommunitySection event={highway} />, { api: fastMockApi("simulate") });
     await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    expect(await screen.findByRole("button", { name: "Demo only, not sent" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Confirmed" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Dispute" }));
+    expect(await screen.findByRole("button", { name: "Disputed" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Confirm" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("asks whether an active event is still happening", () => {

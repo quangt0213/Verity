@@ -55,3 +55,21 @@ export function multilineText(max: number) {
     .transform(normalizeMultiline)
     .pipe(z.string().max(max, { message: `Must be at most ${max} characters` }));
 }
+
+/** Lowercase word tokens longer than two characters, for rough text similarity. */
+export function textTokens(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length > 2),
+  );
+}
+
+/** Jaccard similarity of two token sets (0 = disjoint, 1 = identical). */
+export function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let shared = 0;
+  for (const t of a) if (b.has(t)) shared += 1;
+  return shared / (a.size + b.size - shared);
+}

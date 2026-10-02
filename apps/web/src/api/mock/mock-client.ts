@@ -2,19 +2,23 @@ import {
   bboxContains,
   CATEGORY_KIND,
   communityResponseInputSchema,
+  haversineMeters,
   isActiveStatus,
+  jaccard,
+  textTokens,
   listEventsQuerySchema,
   reportEventInputSchema,
   toEventSummary,
   type EventDetail,
   type EventStatus,
+  type SignalType,
   type ListEventsResponse,
   type TimelineEntry,
 } from "@verity/contracts";
 import type { z } from "zod";
-import { haversineMeters } from "../../lib/geo";
 import { assertSafeId, VerityApiError } from "../errors";
-import { AUTH_UNAVAILABLE_MESSAGE, type VerityApi, type WriteResult } from "../types";
+import { readStored, STORAGE_KEYS, writeStored } from "../../lib/storage";
+import { AUTH_UNAVAILABLE_MESSAGE, signalTypeFor, type VerityApi, type WriteResult } from "../types";
 import { buildDemoEvents } from "./fixtures";
 
 export interface MockApiOptions {
@@ -46,22 +50,6 @@ function fieldErrors(error: z.ZodError): Record<string, string> {
   return fields;
 }
 
-function tokens(text: string): Set<string> {
-  return new Set(
-    text
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((t) => t.length > 2),
-  );
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let shared = 0;
-  for (const t of a) if (b.has(t)) shared += 1;
-  return shared / (a.size + b.size - shared);
-}
-
 /**
  * In-memory demo implementation of the Verity API.
  *
@@ -75,8 +63,13 @@ export function createMockApi(options: MockApiOptions): VerityApi {
   const [minLatency, maxLatency] = options.latencyMs ?? [250, 650];
   const delays = options.verificationDelaysMs ?? { start: 3_000, unavailable: 15_000 };
   const events = new Map<string, EventDetail>(buildDemoEvents(now()).map((e) => [e.id, e]));
-  const responded = new Set<string>();
+  /** The demo viewer's active answers per event, mirroring the service's one-answer-per-question rule. */
+  const answers = new Map<string, Map<"validity" | "current_state", SignalType>>();
   let counter = 0;
+
+  const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+  const readFollows = () =>
+    readStored(STORAGE_KEYS.follows, (raw) => (Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string" && SAFE_ID.test(v)) : null), [] as string[]);
 
   const wait = () =>
     new Promise<void>((resolve) => setTimeout(resolve, minLatency + Math.random() * (maxLatency - minLatency)));
@@ -139,8 +132,33 @@ export function createMockApi(options: MockApiOptions): VerityApi {
 
   return {
     mode: "mock",
-    writePolicy: options.writes === "simulate" ? { enabled: true, simulated: true } : { enabled: false, reason: "auth_unavailable" },
+    writePolicy:
+      options.writes === "simulate" ? { enabled: true, simulated: true, requiresSignIn: false } : { enabled: false, reason: "auth_unavailable" },
     sourceLabel: "Demo data (built in, not real events)",
+    supportsUpdates: true,
+    auth: null,
+
+    async getMySignals(eventId) {
+      return [...(answers.get(eventId)?.values() ?? [])];
+    },
+
+    async setFollowing(eventId, following) {
+      if (!SAFE_ID.test(eventId)) return { ok: false, error: { code: "not_found", message: "Event not found." } };
+      const current = readFollows().filter((id) => id !== eventId);
+      writeStored(STORAGE_KEYS.follows, following ? [eventId, ...current].slice(0, 200) : current);
+      return { ok: true, simulated: true, data: { following } };
+    },
+
+    listFollowing(signal) {
+      return delayed(
+        () =>
+          readFollows()
+            .map((id) => events.get(id))
+            .filter((e): e is EventDetail => Boolean(e))
+            .map(toEventSummary),
+        signal,
+      );
+    },
 
     listEvents(query, signal) {
       return delayed((): ListEventsResponse => {
@@ -198,14 +216,14 @@ export function createMockApi(options: MockApiOptions): VerityApi {
       const at = now().toISOString();
 
       // Same idea as server-side duplicate detection: nearby + same kind + similar wording.
-      const reportTokens = tokens(`${report.title} ${report.description ?? ""}`);
+      const reportTokens = textTokens(`${report.title} ${report.description ?? ""}`);
       const duplicate = [...events.values()].find(
         (e) =>
           isActiveStatus(e.status) &&
           CATEGORY_KIND[e.category] === CATEGORY_KIND[report.category] &&
-          (e.category === report.category || jaccard(reportTokens, tokens(e.title)) >= 0.5) &&
+          (e.category === report.category || jaccard(reportTokens, textTokens(e.title)) >= 0.5) &&
           haversineMeters(e.coordinates, report.location.coordinates) <= 300 &&
-          jaccard(reportTokens, tokens(`${e.title} ${e.summary}`)) >= 0.2,
+          jaccard(reportTokens, textTokens(`${e.title} ${e.summary}`)) >= 0.2,
       );
       if (duplicate) {
         update(duplicate.id, (e) =>
@@ -310,33 +328,40 @@ export function createMockApi(options: MockApiOptions): VerityApi {
       if (!event) return { ok: false, error: { code: "not_found", message: "Event not found." } };
       const response = parsed.data;
 
-      // One response of each kind per event, mirroring the server's uniqueness
-      // rule. Updates are free text and may be added more than once.
-      if (response.kind !== "update") {
-        const key = `${eventId}:${response.kind}`;
-        if (responded.has(key)) {
-          return { ok: false, error: { code: "conflict", message: "You've already responded to this event." } };
-        }
-        responded.add(key);
+      // One active answer per question, like the service: repeating it is a
+      // no-op and a different answer supersedes the old one.
+      const type = signalTypeFor(response);
+      let previous: SignalType | undefined;
+      if (type) {
+        const group = type === "CONFIRM" || type === "DISPUTE" ? "validity" : "current_state";
+        const mine = answers.get(eventId) ?? new Map<"validity" | "current_state", SignalType>();
+        previous = mine.get(group);
+        if (previous === type) return { ok: true, simulated: true, data: { accepted: true, changed: false } };
+        mine.set(group, type);
+        answers.set(eventId, mine);
       }
       await wait();
 
       const at = now().toISOString();
       update(eventId, (e) => {
+        const next = { ...e, last_updated_at: at, community: { ...e.community, still_happening: { ...e.community.still_happening } } };
+        const adjust = (t: SignalType | undefined, delta: 1 | -1) => {
+          if (t === "CONFIRM") {
+            next.community_confirmation_count = Math.max(0, next.community_confirmation_count + delta);
+            next.community.recent_confirmations = Math.max(0, next.community.recent_confirmations + delta);
+          } else if (t === "DISPUTE") {
+            next.community_dispute_count = Math.max(0, next.community_dispute_count + delta);
+            next.community.recent_disputes = Math.max(0, next.community.recent_disputes + delta);
+          } else if (t === "STILL_HAPPENING") next.community.still_happening.yes = Math.max(0, next.community.still_happening.yes + delta);
+          else if (t === "NO_LONGER_HAPPENING") {
+            next.community.still_happening.no = Math.max(0, next.community.still_happening.no + delta);
+            next.community.resolved_reports = Math.max(0, next.community.resolved_reports + delta);
+          } else if (t === "NOT_SURE") next.community.still_happening.not_sure = Math.max(0, next.community.still_happening.not_sure + delta);
+        };
         // Community input adjusts counts only. Status changes belong to the
         // verification engine, which demo mode does not run.
-        const next = { ...e, last_updated_at: at, community: { ...e.community, still_happening: { ...e.community.still_happening } } };
-        if (response.kind === "confirm") {
-          next.community_confirmation_count += 1;
-          next.community.recent_confirmations += 1;
-        } else if (response.kind === "dispute") {
-          next.community_dispute_count += 1;
-          next.community.recent_disputes += 1;
-        } else if (response.kind === "resolved") {
-          next.community.resolved_reports += 1;
-        } else if (response.kind === "still_happening") {
-          next.community.still_happening[response.answer] += 1;
-        }
+        adjust(previous, -1);
+        adjust(type ?? undefined, 1);
         return response.kind === "update"
           ? appendTimeline(next, {
               at,
@@ -349,7 +374,7 @@ export function createMockApi(options: MockApiOptions): VerityApi {
             })
           : next;
       });
-      return { ok: true, simulated: true, data: { accepted: true } };
+      return { ok: true, simulated: true, data: { accepted: true, changed: true } };
     },
   };
 }

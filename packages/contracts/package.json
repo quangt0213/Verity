@@ -5,7 +5,8 @@
   "description": "Shared Verity API contract: Zod schemas, enums and limits used by the frontend and the Verity service.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./demo": "./src/demo.ts"
   },
   "scripts": {
     "test": "vitest run",

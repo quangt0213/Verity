@@ -16,12 +16,19 @@ function retry(failureCount: number, error: unknown): boolean {
   return failureCount < 2;
 }
 
-const verifying = (e: Pick<EventSummary, "verification_state">) =>
-  e.verification_state === "queued" || e.verification_state === "in_progress";
-
-/** Poll quickly only while something visible is being verified. */
+/**
+ * Poll quickly only while verification is actively running; queued work may
+ * wait for a worker, so it gets a moderate interval instead of hammering.
+ */
 const FAST_POLL_MS = 5_000;
+const QUEUED_POLL_MS = 30_000;
 const SLOW_POLL_MS = 60_000;
+
+function pollInterval(items: Array<Pick<EventSummary, "verification_state">>): number {
+  if (items.some((e) => e.verification_state === "in_progress")) return FAST_POLL_MS;
+  if (items.some((e) => e.verification_state === "queued")) return QUEUED_POLL_MS;
+  return SLOW_POLL_MS;
+}
 
 export function useEventList(query: ListEventsQuery | null) {
   const api = useApi();
@@ -31,7 +38,7 @@ export function useEventList(query: ListEventsQuery | null) {
     enabled: query !== null,
     placeholderData: keepPreviousData,
     retry,
-    refetchInterval: (q) => (q.state.data?.events.some(verifying) ? FAST_POLL_MS : SLOW_POLL_MS),
+    refetchInterval: (q) => pollInterval(q.state.data?.events ?? []),
   });
 }
 
@@ -42,6 +49,6 @@ export function useEventDetail(id: string | null) {
     queryFn: ({ signal }) => api.getEvent(id ?? "", signal),
     enabled: id !== null,
     retry,
-    refetchInterval: (q) => (q.state.data && verifying(q.state.data) ? FAST_POLL_MS : SLOW_POLL_MS),
+    refetchInterval: (q) => pollInterval(q.state.data ? [q.state.data] : []),
   });
 }
