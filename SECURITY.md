@@ -20,7 +20,8 @@ cross-origin authentication analysis, and the known remaining risks.
 | Secret | Where it lives |
 | --- | --- |
 | `DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `INTERNAL_API_TOKEN` | `apps/api/.env` / service environment only |
-| `NIMBLE_API_KEY`, `NIMBLE_BASE_URL`, `RAWTREE_API_KEY`, `RAWTREE_DATABASE` | Reserved for Phase 3; service only (accepted but unused now) |
+| `NIMBLE_API_KEY` | The **verification worker's** environment only (Phase 3). The API never reads it. |
+| `RAWTREE_API_KEY`, `RAWTREE_DATABASE` | Reserved for a later phase; accepted but unused |
 
 - Templates hold placeholders only (`apps/api/.env.example`,
   `apps/web/.env.example`). Every other `.env*` file is git-ignored.
@@ -33,6 +34,13 @@ cross-origin authentication analysis, and the known remaining risks.
   2. A post-build scan fails if `dist/` contains server secret names, credential
      shapes or literal secret values from the environment or local env files.
 - The browser never calls Nimble or RawTree.
+- **The verification worker refuses to start in production** without
+  `NIMBLE_API_KEY`, and only ever sends the key to `https://sdk.nimbleway.com`
+  (a local stand-in is allowed outside production). Its configuration
+  serializes with the key and database URL redacted (tested).
+- The repository is public and Maypop builds the frontend from it: nothing
+  secret is ever committed, and only explicitly public `VITE_*` values reach
+  the build.
 
 ## Authentication
 
@@ -215,6 +223,12 @@ superuser nor `BYPASSRLS`. It checks that every normal service operation still
 works and that client roles can't read or write. It also fails if a later
 migration adds a table without RLS.
 
+Every later table gets the same treatment in its own migration: `0003` enables
+RLS on `verification_runs` and revokes the client roles explicitly.
+`test/migrations.test.ts` upgrades a populated `0002` database under
+Supabase-like roles to the current schema and checks that no rows are lost and
+the new table is protected.
+
 Connect with `sslmode=require` in `DATABASE_URL`. postgres.js doesn't use TLS
 unless the URL asks for it.
 
@@ -284,6 +298,14 @@ database failure returns a generic 500 (tested).
   until there is a privacy-preserving definition.
 - Community counts are aggregates. No identities, distances or reporter details
   are ever returned publicly (tested).
+- **Verification (Phase 3, in progress) uses third-party processors.** To find
+  evidence, the verification worker sends an event's category, wording and
+  location context to Nimble, and may resolve event coordinates to place names
+  through a reverse geocoder. Only the minimum event information needed is
+  sent: never reporter identity, email or account data. Reverse-geocoded place
+  names are derived search metadata about the event, not data about a person.
+  There is no continuous user-location tracking, and event-location
+  verification stays separate from any future user-location feature.
 
 ## Demo data
 
@@ -298,7 +320,7 @@ database failure returns a generic 500 (tested).
 
 1. **Real Maypop not yet tested.** The cross-site iframe design was verified
    locally with Maypop's sandbox flags, but not on real Maypop. After the first
-   publish:
+   GitHub-imported Maypop build:
    - add the exact app origin to `VERITY_ALLOWED_ORIGINS`;
    - confirm Maypop's own response headers don't block calls to the API;
    - run the flow end to end (browse, sign in, report, confirm, follow, reload).

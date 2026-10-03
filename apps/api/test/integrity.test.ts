@@ -1,9 +1,38 @@
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { communitySignals, eventStateTransitions, events, eventTimeline, sourceRecords } from "../src/db/schema";
+import {
+  communitySignals,
+  eventStateTransitions,
+  events,
+  eventTimeline,
+  sourceRecords,
+  verificationJobs,
+  verificationRuns,
+} from "../src/db/schema";
 import { checkTransition } from "../src/domain/state-machine";
 import { TransitionError, transitionEvent } from "../src/domain/transitions";
 import { createTestContext, INTERNAL_TOKEN, validReport, type TestContext } from "./helpers";
+
+/** The violated constraint's name, from the driver error anywhere in the cause chain. */
+function violatedConstraint(error: unknown): string | undefined {
+  let current: unknown = error;
+  while (current && typeof current === "object") {
+    if ("constraint" in current && typeof current.constraint === "string") return current.constraint;
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return undefined;
+}
+
+async function expectViolation(query: PromiseLike<unknown>, constraint: string) {
+  let caught: unknown;
+  try {
+    await query;
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught, `expected ${constraint} to be violated`).toBeDefined();
+  expect(violatedConstraint(caught)).toBe(constraint);
+}
 
 let ctx: TestContext;
 let eventId: string;
@@ -139,6 +168,95 @@ describe("database constraints", () => {
     await ctx.db.insert(sourceRecords).values({ ...record, countsAsIndependent: true });
     await expect(ctx.db.insert(sourceRecords).values({ ...record, countsAsIndependent: true })).rejects.toThrow();
     await ctx.db.insert(sourceRecords).values({ ...record, countsAsIndependent: false });
+  });
+
+  it("keep one record per canonical source URL per event", async () => {
+    const record = {
+      sourceType: "news_article",
+      sourceName: "Canonical probe",
+      stance: "supports",
+      sourceClass: "LOCAL_NEWS",
+      isPrimary: false,
+      countsAsIndependent: false,
+    };
+    // source_url holds the canonical URL; tracking-parameter variants are
+    // normalized to this before they reach the database.
+    const canonical = "https://news.example/story";
+    await ctx.db.insert(sourceRecords).values({ ...record, eventId, lineageId: "pub:news.example", sourceUrl: canonical });
+    await expectViolation(
+      ctx.db.insert(sourceRecords).values({ ...record, eventId, lineageId: "pub:other", sourceUrl: canonical }),
+      "source_records_one_per_url",
+    );
+
+    // The same resource may be evidence for a different event.
+    const [other] = await ctx.db
+      .insert(events)
+      .values({ title: "Other event", category: "crash", latitude: 37.71, longitude: -122.41, approximateLocation: "Elsewhere", origin: "community_report" })
+      .returning({ id: events.id });
+    await ctx.db.insert(sourceRecords).values({ ...record, eventId: other!.id, lineageId: "pub:news.example", sourceUrl: canonical });
+
+    // Records without a URL (community reports) are unaffected.
+    await ctx.db.insert(sourceRecords).values({ ...record, eventId, lineageId: "community", sourceType: "community_report", sourceClass: "COMMUNITY" });
+    await ctx.db.insert(sourceRecords).values({ ...record, eventId, lineageId: "community", sourceType: "community_report", sourceClass: "COMMUNITY" });
+  });
+
+  it("accept RECHECK verification jobs and reject unknown reasons", async () => {
+    const job = { kind: "VERIFY_EVENT", eventId, status: "succeeded" };
+    await ctx.db.insert(verificationJobs).values({ ...job, reason: "RECHECK", idempotencyKey: "recheck:probe:1" });
+    await expectViolation(
+      ctx.db.insert(verificationJobs).values({ ...job, reason: "BOGUS", idempotencyKey: "recheck:probe:2" }),
+      "verification_jobs_reason_valid",
+    );
+  });
+
+  it("keep one verification run per job with a consistent lifecycle and agent claim", async () => {
+    const newJob = async (key: string) => {
+      const [job] = await ctx.db
+        .insert(verificationJobs)
+        .values({ kind: "VERIFY_EVENT", eventId, reason: "MANUAL", status: "succeeded", idempotencyKey: key })
+        .returning({ id: verificationJobs.id });
+      return job!.id;
+    };
+
+    const jobId = await newJob("run-probe:1");
+    const [run] = await ctx.db.insert(verificationRuns).values({ jobId, eventId }).returning();
+    expect(run).toMatchObject({ outcome: "running", searchCount: 0, agentRunCount: 0, agentRequestedAt: null, evidenceIds: [] });
+    // One logical run per job: a retry resumes it, never starts another.
+    await expectViolation(ctx.db.insert(verificationRuns).values({ jobId, eventId }), "verification_runs_one_per_job");
+
+    const other = await newJob("run-probe:2");
+    // Open outcomes have no completion time; final outcomes must have one.
+    await expectViolation(ctx.db.insert(verificationRuns).values({ jobId: other, eventId, outcome: "no_change" }), "verification_runs_completion_consistent");
+    await expectViolation(
+      ctx.db.insert(verificationRuns).values({ jobId: other, eventId, outcome: "running", completedAt: new Date() }),
+      "verification_runs_completion_consistent",
+    );
+    // An agent run id can only exist after the slot was claimed, and a run holds at most one agent.
+    await expectViolation(ctx.db.insert(verificationRuns).values({ jobId: other, eventId, agentRunId: "task_run_x" }), "verification_runs_agent_id_requires_claim");
+    await expectViolation(ctx.db.insert(verificationRuns).values({ jobId: other, eventId, agentRunCount: 1 }), "verification_runs_agent_claim_consistent");
+    await expectViolation(
+      ctx.db.insert(verificationRuns).values({ jobId: other, eventId, agentRunCount: 2 }),
+      "verification_runs_agent_count_range",
+    );
+
+    // The agent slot is claimed with a conditional update that only one caller can win.
+    const claim = () =>
+      ctx.db
+        .update(verificationRuns)
+        .set({ agentRunCount: 1, agentRequestedAt: sql`now()` })
+        .where(sql`${verificationRuns.id} = ${run!.id} and ${verificationRuns.agentRequestedAt} is null`)
+        .returning({ id: verificationRuns.id });
+    expect(await claim()).toHaveLength(1);
+    expect(await claim()).toHaveLength(0);
+
+    // Evidence ids round-trip, and finishing requires a completion time.
+    const evidenceId = "00000000-0000-4000-8000-0000000000aa";
+    const [done] = await ctx.db
+      .update(verificationRuns)
+      .set({ outcome: "no_change", completedAt: new Date(), decisionRuleId: "no_change", evidenceIds: [evidenceId] })
+      .where(eq(verificationRuns.id, run!.id))
+      .returning();
+    expect(done!.evidenceIds).toEqual([evidenceId]);
   });
 
   it("reject non-http source URLs at the database level", async () => {

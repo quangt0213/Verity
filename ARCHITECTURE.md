@@ -7,8 +7,12 @@ justify**.
 
 > **Status:** Phase 1 (the frontend) and Phase 2 (the Verity service: Postgres,
 > authentication, reports, signals, follows, transitions, outbox) are
-> implemented. Sections marked **(planned)** are later phases; their designs and
-> API facts come from the official Nimble and RawTree docs.
+> implemented. Phase 3 (evidence verification with Nimble) is in progress: its
+> schema (`verification_runs`, `RECHECK` jobs, canonical source URLs) and
+> worker configuration exist; the worker itself does not yet. Sections marked
+> **(planned)** are later phases; their designs and API facts come from the
+> official Nimble and RawTree docs, which must be re-checked before
+> implementation (the Nimble agent API has changed since this was written).
 
 ## 1. System overview
 
@@ -66,6 +70,7 @@ apps/api/             The Verity service (Fastify 5, Drizzle ORM, Postgres / PGl
   src/auth/           Better Auth setup, identity resolution, mailers
   src/domain/         read model, reports, dedupe, signals, state machine, transitions, outbox
   src/routes/         public reads · auth · contributions · internal (operator) routes
+  src/worker/         verification worker (Phase 3): configuration so far
   src/security/       CORS + origin guard, rate limiter, error handling
   test/               API tests against an in-memory Postgres
 docs/MAYPOP.md        What Maypop provides, and the identity decision
@@ -261,10 +266,11 @@ Phase 2 produces UNVERIFIED events plus operator transitions through
 | `reports` | Individual claims | FK to event and reporter, ranges, `source_url ~ '^https?://'` |
 | `community_signals` | Answers with history | type↔group consistency, `active = (superseded_at IS NULL)`, one active per (event, user, group) |
 | `event_follows` | Follows | PK (user, event) |
-| `source_records` | Evidence (community now, Nimble later) | enum CHECKs, one independent record per (event, lineage) |
+| `source_records` | Evidence (community now, Nimble later). `source_url` holds the **canonical** URL | enum CHECKs, one independent record per (event, lineage), one record per (event, canonical URL) |
 | `event_timeline` | User-facing history | append-only trigger |
 | `event_state_transitions` | Audit of every status change | append-only, `from ≠ to`, reason required |
-| `verification_jobs` | Outbox for verification work | unique idempotency key, one open job per event, attempt bounds |
+| `verification_jobs` | Outbox for verification work (reasons: new report, attached report, community dispute, manual, `RECHECK`) | unique idempotency key, one open job per event, attempt bounds |
+| `verification_runs` | One logical run per job: provenance (counts, decision rule, transition, evidence ids) and retry safety for the single paid agent investigation | one per job; agent slot claimed before the call; ids, counts and short codes only |
 | `rate_limit_counters` | Fixed-window limits | keys are HMACs (no raw email or IP) |
 
 ### API (`/api/v1`)

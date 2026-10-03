@@ -1,5 +1,7 @@
-# Maypop app manifest. `maypop init` reads [app] to seed the remote app;
-# afterwards apply metadata changes with `maypop app apply`.
+# Maypop app manifest. Verity's challenge deployment is GitHub -> Maypop web
+# import/build; the Maypop CLI (`maypop init` / `maypop app apply` /
+# `maypop publish`) is optional. Keep this file until it is confirmed whether
+# the GitHub importer reads it.
 [app]
 name = "Verity"
 description = "What's actually happening around you, and the evidence behind it."
@@ -10,8 +12,9 @@ link_access = "request"
 allow_remixing = false
 tags = ["local", "community", "maps"]
 
-# Only the static frontend in apps/web is built and uploaded. `maypop publish`
-# builds locally, so VITE_* values come from apps/web/.env.production.local.
+# Only the static frontend in apps/web is built. Its public VITE_* values must
+# be present at build time: from the build environment (GitHub-imported
+# builds), or apps/web/.env.production.local for a local `maypop publish`.
 [build]
 framework = "vite"
 command = ["npm", "run", "build:web"]

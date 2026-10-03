@@ -16,21 +16,36 @@ behavior.
 ## Hosting model
 
 - Maypop hosts **static** builds only: Vite/Rsbuild `dist/`, or a Next.js
-  `output: "export"`. `maypop publish` builds locally, pushes Git `HEAD` and
-  uploads the static output. There is **no server runtime** for app code.
+  `output: "export"`. There is **no server runtime** for app code.
+- **Verity's challenge deployment path:** push to GitHub, and the Maypop web
+  platform imports and builds the repository. The Maypop CLI (`maypop
+  publish`, which builds locally, pushes Git `HEAD` and uploads the output)
+  remains an optional alternative; neither it nor its Rust toolchain is
+  required.
+- **Not documented, verify on the first GitHub build:** whether the importer
+  runs `maypop.toml`'s `[build]` command, which Node version it uses,
+  whether it installs npm workspaces from the repository root, and whether
+  build-time environment variables (Verity's public `VITE_*` values) can be
+  set. `maypop.toml` stays until this is known.
 - Apps run in a **sandboxed, cross-origin iframe**
   (`allow-scripts allow-same-origin allow-forms allow-popups allow-modals
   allow-popups-to-escape-sandbox allow-downloads`).
 - The SDK warns that app code calling third-party HTTP APIs "almost always
   fail[s] in the sandboxed iframe (browser CORS, or a leaked/blocked API key)".
   Whether Maypop's production host adds a CSP that restricts `connect-src` for
-  app origins is **not documented**. It must be verified after the first publish,
+  app origins is **not documented**. It must be verified after the first build,
   together with the exact app origin (needed for the Verity service's CORS
   allowlist).
 
 **Consequence:** nothing secret can live in the Maypop project. Postgres, the
 Nimble and RawTree keys, the verification worker and rate limiting all belong to
-a separately deployed Verity service.
+a separately deployed Verity service. Because Maypop builds from the public
+GitHub repository, nothing secret may be committed either.
+
+**Maypop is a Verity client, not Verity's platform.** Verity's domain model,
+APIs, verification and authentication are client-agnostic so that future
+clients (a standalone web app, PWA or mobile wrapper) can use the same
+service. Maypop-specific code stays at the client boundary (`apps/web/src/maypop/`).
 
 ## Identity
 

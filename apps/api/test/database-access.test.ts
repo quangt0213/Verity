@@ -1,7 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Database } from "../src/db/client";
-import { createTestContext, INTERNAL_TOKEN, validReport, type TestContext } from "./helpers";
+import { createTestContext, INTERNAL_TOKEN, SUPABASE_LIKE_SETUP, validReport, type TestContext } from "./helpers";
 
 // Verity's database is reached only by the Verity service. Hosted Postgres
 // (Supabase) also exposes the public schema to its client APIs through the
@@ -22,28 +22,10 @@ const VERITY_TABLES = [
   "source_records",
   "users",
   "verification_jobs",
+  "verification_runs",
 ];
 const CLIENT_ROLES = ["anon", "authenticated"] as const;
 const TABLE_PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
-
-// The parts of a Supabase project that matter here: client API roles that are
-// granted every new public table by default, and migrations run by the role
-// that owns the tables. That owner is neither superuser nor BYPASSRLS, which is
-// stricter than Supabase's postgres role, so the service working here shows it
-// relies on table ownership alone.
-const SUPABASE_LIKE_SETUP = [
-  "CREATE ROLE anon NOLOGIN",
-  "CREATE ROLE authenticated NOLOGIN",
-  "CREATE ROLE verity_service NOLOGIN NOSUPERUSER NOBYPASSRLS",
-  "GRANT USAGE ON SCHEMA public TO anon, authenticated",
-  "GRANT CREATE ON SCHEMA public TO verity_service",
-  "DO $$ BEGIN EXECUTE format('GRANT CREATE ON DATABASE %I TO verity_service', current_database()); END $$",
-  "ALTER DEFAULT PRIVILEGES FOR ROLE verity_service IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated",
-  "ALTER DEFAULT PRIVILEGES FOR ROLE verity_service IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated",
-  "ALTER DEFAULT PRIVILEGES FOR ROLE verity_service IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated",
-  // Session-wide: migrations and the app below run as the owner role.
-  "SET ROLE verity_service",
-];
 
 /** A text[] literal from fixed identifiers (constants only, never user input). */
 const textArray = (values: readonly string[]) => sql.raw(`ARRAY[${values.map((v) => `'${v}'`).join(", ")}]::text[]`);
@@ -218,6 +200,11 @@ describe("Supabase-like hosted Postgres", () => {
       ).toBe("42501");
       expect(await asClientRole(ctx.db, role, sql`update events set title = 'Rewritten'`), `${role} update events`).toBe("42501");
       expect(await asClientRole(ctx.db, role, sql`delete from event_follows`), `${role} delete follows`).toBe("42501");
+      expect(await asClientRole(ctx.db, role, sql`select * from verification_runs`), `${role} select runs`).toBe("42501");
+      expect(
+        await asClientRole(ctx.db, role, sql`update verification_runs set agent_run_id = 'forged'`),
+        `${role} update runs`,
+      ).toBe("42501");
     }
   });
 

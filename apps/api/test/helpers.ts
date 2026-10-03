@@ -92,6 +92,25 @@ export async function seedDemo(db: Database) {
 
 export const SF_BBOX = "-122.55,37.7,-122.35,37.83";
 
+// The parts of a Supabase project that matter here: client API roles that are
+// granted every new public table by default, and migrations run by the role
+// that owns the tables. That owner is neither superuser nor BYPASSRLS, which is
+// stricter than Supabase's postgres role, so the service working here shows it
+// relies on table ownership alone.
+export const SUPABASE_LIKE_SETUP = [
+  "CREATE ROLE anon NOLOGIN",
+  "CREATE ROLE authenticated NOLOGIN",
+  "CREATE ROLE verity_service NOLOGIN NOSUPERUSER NOBYPASSRLS",
+  "GRANT USAGE ON SCHEMA public TO anon, authenticated",
+  "GRANT CREATE ON SCHEMA public TO verity_service",
+  "DO $$ BEGIN EXECUTE format('GRANT CREATE ON DATABASE %I TO verity_service', current_database()); END $$",
+  "ALTER DEFAULT PRIVILEGES FOR ROLE verity_service IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated",
+  "ALTER DEFAULT PRIVILEGES FOR ROLE verity_service IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated",
+  "ALTER DEFAULT PRIVILEGES FOR ROLE verity_service IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated",
+  // Session-wide: migrations and the app below run as the owner role.
+  "SET ROLE verity_service",
+];
+
 export const validReport = {
   category: "road_closure",
   title: "Road blocked near Mission St",
