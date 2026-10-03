@@ -151,6 +151,6 @@ Then run `maypop auth`, `maypop init` (once, from the repo root), commit, and
 packages/contracts/   Shared Zod API contract, limits, demo fixtures (frontend + service)
 apps/web/             Maypop static app (Vite, React 19, Tailwind 4, MapLibre 6)
 apps/api/             Verity service (Fastify 5, Drizzle + Postgres/PGlite, Better Auth)
-  drizzle/            SQL migrations (schema + integrity triggers)
+  drizzle/            SQL migrations (schema, integrity triggers, client-API lockdown)
 docs/                 Platform research notes
 ```

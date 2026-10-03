@@ -60,7 +60,7 @@ apps/web/             The Maypop app (static Vite build).
   scripts/            post-build bundle secret scan
   e2e/                Playwright smoke tests against the production bundle
 apps/api/             The Verity service (Fastify 5, Drizzle ORM, Postgres / PGlite, Better Auth).
-  drizzle/            SQL migrations: schema + integrity triggers
+  drizzle/            SQL migrations: schema, integrity triggers, client-API lockdown
   src/config.ts       Validated environment; refuses insecure production settings
   src/db/             schema, client (postgres.js or PGlite), dev seed
   src/auth/           Better Auth setup, identity resolution, mailers

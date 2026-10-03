@@ -189,6 +189,35 @@ contract) in the browser and on the service. The service is authoritative.
   foreign keys, unique and partial-unique indexes, and triggers for append-only
   history and status changes (tested by direct inserts that bypass the app).
 
+## Database access
+
+Only the Verity service talks to Postgres. The browser and Maypop never get a
+database connection, key or URL.
+
+Hosted Postgres providers can add their own client APIs on top of the database.
+Supabase, used here as hosted Postgres only, exposes the `public` schema through
+its Data API (PostgREST and GraphQL) as the `anon` and `authenticated` roles, and
+by default grants those roles every new table. Verity uses none of this, so
+migration `0002_lock_down_supabase_data_api` closes it at two layers:
+
+1. **Row-level security is on for every table, with no policies.** A role
+   without `BYPASSRLS` that isn't the table owner sees no rows and can write
+   none. The service connects as the owner, which RLS doesn't apply to.
+2. **No privileges for client roles.** All table and function privileges are
+   revoked from `anon` and `authenticated`. The migration role's default
+   privileges in `public` no longer grant them future tables, sequences or
+   functions.
+
+The role statements run only when those roles exist, so plain Postgres and
+PGlite apply the migration unchanged. `test/database-access.test.ts` builds a
+Supabase-like database, with client roles and a table owner that is neither
+superuser nor `BYPASSRLS`. It checks that every normal service operation still
+works and that client roles can't read or write. It also fails if a later
+migration adds a table without RLS.
+
+Connect with `sslmode=require` in `DATABASE_URL`. postgres.js doesn't use TLS
+unless the URL asks for it.
+
 ## User-submitted URLs (SSRF)
 
 **Phase 2: validate and store, never fetch.**

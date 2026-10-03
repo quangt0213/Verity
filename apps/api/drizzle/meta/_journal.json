@@ -15,6 +15,13 @@
       "when": 1790929027637,
       "tag": "0001_integrity_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791012919362,
+      "tag": "0002_lock_down_supabase_data_api",
+      "breakpoints": true
     }
   ]
 }

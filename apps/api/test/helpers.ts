@@ -23,7 +23,10 @@ export interface TestContext {
   closeDatabase: () => Promise<void>;
 }
 
-export async function createTestContext(env: Record<string, string> = {}): Promise<TestContext> {
+export async function createTestContext(
+  env: Record<string, string> = {},
+  options: { beforeMigrate?: (db: Database) => Promise<void> } = {},
+): Promise<TestContext> {
   const config = loadConfig({
     NODE_ENV: "test",
     VERITY_ALLOWED_ORIGINS: ORIGIN,
@@ -31,6 +34,7 @@ export async function createTestContext(env: Record<string, string> = {}): Promi
     ...env,
   });
   const database = createDatabase("pglite:memory");
+  await options.beforeMigrate?.(database.db);
   await database.migrate();
   const mailer = memoryMailer();
   const app = await buildApp({ config, db: database.db, mailer });
