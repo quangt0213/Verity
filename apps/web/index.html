@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- data-maypop-theme="manual": Verity manages <html data-theme> itself (System follows the Maypop host theme). -->
+<html lang="en" data-maypop-theme="manual">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta name="description" content="Verity: what's actually happening around you, with the evidence behind it." />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#15171b" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>Verity</title>
+    <!-- Applies the saved theme before first paint (external file so the CSP needs no 'unsafe-inline'). -->
+    <script src="./theme-init.js"></script>
+  </head>
+  <body>
+    <noscript>Verity needs JavaScript to show the map and event feed.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

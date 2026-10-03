@@ -1,0 +1,34 @@
+{
+  "name": "verity",
+  "private": true,
+  "type": "module",
+  "description": "Community-powered, evidence-backed local intelligence.",
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @verity/web",
+    "dev:api": "npm run dev -w @verity/api",
+    "build": "npm run build -w @verity/web && npm run build -w @verity/api",
+    "build:web": "npm run build -w @verity/web",
+    "preview": "npm run preview -w @verity/web",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.0"
+  }
+}

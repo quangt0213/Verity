@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+coverage/
+
+# Environment files: secrets never enter Git. Only the .env.example templates are tracked.
+.env
+.env.*
+!.env.example
+
+# Maypop per-machine state (local identity, dev.json, local KV/Drive data, lock).
+# .maypop/kv-policy.json and .maypop/publish/ are intentionally tracked.
+**/.maypop/local/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Playwright
+apps/web/dist-e2e/
+apps/web/test-results/
+apps/web/playwright-report/
+
+# Verity service local state (embedded dev database, dev email outbox)
+apps/api/.data/
+apps/web/dist-e2e-service/

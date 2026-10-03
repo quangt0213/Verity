@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/dist-e2e*
+**/test-results
+**/playwright-report
+**/.data
+**/.maypop/local
+**/.env
+**/.env.*
+!**/.env.example
+.git

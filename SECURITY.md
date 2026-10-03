@@ -1,0 +1,328 @@
+# Security
+
+Verity is built to be publicly accessible. This document covers the protections
+in place after Phase 2 (the Maypop-hosted frontend plus the Verity service), the
+cross-origin authentication analysis, and the known remaining risks.
+
+## Trust model
+
+- **Untrusted:**
+  - the browser and the Maypop iframe environment;
+  - every client-supplied field, including user ids, usernames, roles, group
+    ids, Maypop ids and counts;
+  - user reports and any scraped content.
+- **Trusted:** the Verity service, a separate deployment. It holds every
+  credential and makes every security-sensitive decision: validation,
+  authentication, authorization, rate limits and state transitions.
+
+## Secret management
+
+| Secret | Where it lives |
+| --- | --- |
+| `DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `INTERNAL_API_TOKEN` | `apps/api/.env` / service environment only |
+| `NIMBLE_API_KEY`, `NIMBLE_BASE_URL`, `RAWTREE_API_KEY`, `RAWTREE_DATABASE` | Reserved for Phase 3; service only (accepted but unused now) |
+
+- Templates hold placeholders only (`apps/api/.env.example`,
+  `apps/web/.env.example`). Every other `.env*` file is git-ignored.
+- **The service refuses to start in production** with an embedded database, a
+  short or default session secret, missing or wildcard or non-https origins, a
+  non-https public URL, or a non-SMTP email transport. Error messages name the
+  variable, never its value (tested).
+- **Frontend guards:**
+  1. The build refuses secret-like `VITE_*` names.
+  2. A post-build scan fails if `dist/` contains server secret names, credential
+     shapes or literal secret values from the environment or local env files.
+- The browser never calls Nimble or RawTree.
+
+## Authentication
+
+**Finding (Phase 1):** Maypop offers only a pseudonymous, app-scoped identity
+and **no verifiable assertion** an external backend can check (see
+[docs/MAYPOP.md](docs/MAYPOP.md)). It is display-only and never linked to a
+Verity account.
+
+**Verity's own authentication (Phase 2):**
+
+- **Passwordless email codes** using [Better Auth](https://better-auth.com)
+  (v1.7.7, pinned), a maintained TypeScript auth library. No custom
+  cryptography:
+  - 6-digit codes, **stored hashed**, 10-minute expiry, 5 attempts, single use (tested);
+  - the start endpoint answers the same way whether or not an account exists (tested);
+  - code delivery is fire-and-forget, so response timing doesn't reveal it.
+- **Sessions:**
+  - opaque random tokens, 30-day sliding expiry, revocable through sign-out (tested);
+  - the client receives a **signed** token (`token.signature`, HMAC with
+    `SESSION_SECRET`), so a leaked database row alone can't be replayed;
+  - session rows never store IP addresses or user agents (a hook forces null; tested).
+- **Better Auth's HTTP router isn't exposed.** Verity calls the library
+  server-side, behind its own validation and rate limits. Telemetry is
+  disabled, and passwords and OAuth are off.
+- `GET /me` returns a masked email only.
+
+## Authorization
+
+- Every write (`/reports`, `/signals`, `/follow`) and every "my" read requires
+  a valid session. The user id is derived **only** from the session.
+- Strict request schemas reject `user_id`, `created_by`, `reporter_user_id`,
+  `role`, `maypop_user_id`, `status`, `count` and any other unexpected field.
+  Maypop-style headers carry no meaning. All of this is tested, and the browser
+  suite checks that no request ever carries Maypop identity or cookies.
+- Community input cannot change status, at three levels:
+  - the signal code never calls transitions;
+  - the state machine gives community actors no edges;
+  - a database trigger refuses status changes outside the transition service.
+- Operator endpoints (`/internal/v1`):
+  - disabled unless `INTERNAL_API_TOKEN` (32+ characters) is set;
+  - the token is compared in constant time;
+  - any request carrying an `Origin` header is refused, so browsers can't use them.
+
+## Cross-origin design: cookies, CORS and CSRF
+
+**Deployment shape.** The frontend is served from a Maypop app origin, framed
+inside the Maypop site. The API lives on Verity's own domain. Every API call is
+therefore **cross-site, from a third-party iframe**.
+
+**Why not cookies:**
+
+| Browser | Third-party cookies set by the API in this context |
+| --- | --- |
+| Safari (ITP) | Blocked |
+| Firefox (Total Cookie Protection) | Partitioned |
+| Chrome | Allowed only with `SameSite=None; Secure`, and users can block them |
+
+Partitioned cookies (CHIPS) help in some browsers only. A cookie session would
+silently fail for part of the audience.
+
+**Chosen design: bearer tokens.**
+
+- The session token goes in `Authorization: Bearer …`.
+- It's stored in the app's own `localStorage`. In a third-party iframe this is
+  partitioned per top-level site but persists across visits.
+- Every request uses `credentials: "omit"`, and the API never enables
+  `Access-Control-Allow-Credentials`.
+
+**CSRF.** Browsers never attach `Authorization` headers automatically, so a
+forged cross-site request has no credential. On top of that:
+
+- **Origin guard.** Any POST or DELETE carrying an `Origin` header that isn't
+  in `VERITY_ALLOWED_ORIGINS` is refused with 403, even with a valid token
+  (tested).
+- **No simple requests.** Mutations accept only `application/json`; form
+  encodings get 415. Every write therefore needs a CORS preflight, which
+  disallowed origins fail.
+
+**CORS:**
+
+- Exact-origin allowlist (`VERITY_ALLOWED_ORIGINS`), never `*`.
+- `Origin: null` is never allowed.
+- Methods: GET, POST, DELETE. Headers: `Content-Type`, `Authorization`,
+  `X-Request-Id`.
+- CORS is not treated as authentication.
+
+**What was tested.** A Playwright run against the production bundle used three
+different sites:
+
+- a host page standing in for Maypop;
+- the frontend in an iframe with Maypop's exact sandbox flags;
+- the API.
+
+It covered sign-in, report, confirm from a second account, follow, reload and
+persistence. **Still to verify on real Maypop:** the app's real origin (to add
+to the allowlist) and Maypop's own response headers. See remaining risks.
+
+**Token-storage trade-off.** A token in `localStorage` is readable by script
+running in the app's origin. Mitigations:
+
+- a strict CSP with no inline or eval scripts;
+- no raw-HTML rendering (lint-enforced);
+- strict response validation;
+- revocable, signed tokens with a 30-day expiry.
+
+## Rate limiting
+
+Limits are Postgres-backed fixed windows. They're shared across instances, and
+their keys are HMACs, so no raw emails or IPs are stored. IP-based buckets are
+short-lived and never treated as identities.
+
+| Action | Limits |
+| --- | --- |
+| Request sign-in code | 5 / 15 min and 20 / day per email; 20 / 15 min per network |
+| Verify code | 10 / 15 min per email; 40 / 15 min per network; plus 5 attempts per code |
+| Create report | 10 / hour and 30 / day per account; 30 / hour per network |
+| Community signal | 60 / hour per account; 300 / hour per network |
+| Follow / unfollow | 120 / hour per account |
+
+Exceeding a limit returns 429 with `Retry-After` (tested). Behind a load
+balancer, set `TRUST_PROXY` so the client address is the real one.
+
+**Phase 3 quota protection.** Verification is already behind an outbox:
+
+- one open job per event;
+- idempotency keys per trigger;
+- clients can never trigger a job directly.
+
+Phase 3 adds per-event cooldowns and a global daily Nimble budget.
+
+## Input validation
+
+All bodies and queries are validated by the **same Zod schemas** (shared
+contract) in the browser and on the service. The service is authoritative.
+
+| Input | Rule |
+| --- | --- |
+| Title | 4–120 characters after normalization |
+| Description | ≤ 1,000 |
+| Location label | ≤ 120 |
+| Search | ≤ 100 |
+| Coordinates | Finite, in range, numbers only |
+| Viewport | Ordered, ≤ 8° per axis |
+| Observed time | Within the last 7 days, not in the future |
+| Enums | Allowlisted |
+| Event ids | UUID, otherwise 404 |
+| Query strings | Unknown or repeated parameters rejected |
+
+- Request bodies are capped at **16 KB** (413), must be JSON, and
+  prototype-poisoning payloads are refused.
+- Text normalization strips control characters, zero-width characters and
+  bidirectional overrides.
+- **Database constraints back all of this up**: enum CHECKs, ranges, lengths,
+  foreign keys, unique and partial-unique indexes, and triggers for append-only
+  history and status changes (tested by direct inserts that bypass the app).
+
+## Database access
+
+Only the Verity service talks to Postgres. The browser and Maypop never get a
+database connection, key or URL.
+
+Hosted Postgres providers can add their own client APIs on top of the database.
+Supabase, used here as hosted Postgres only, exposes the `public` schema through
+its Data API (PostgREST and GraphQL) as the `anon` and `authenticated` roles, and
+by default grants those roles every new table. Verity uses none of this, so
+migration `0002_lock_down_supabase_data_api` closes it at two layers:
+
+1. **Row-level security is on for every table, with no policies.** A role
+   without `BYPASSRLS` that isn't the table owner sees no rows and can write
+   none. The service connects as the owner, which RLS doesn't apply to.
+2. **No privileges for client roles.** All table and function privileges are
+   revoked from `anon` and `authenticated`. The migration role's default
+   privileges in `public` no longer grant them future tables, sequences or
+   functions.
+
+The role statements run only when those roles exist, so plain Postgres and
+PGlite apply the migration unchanged. `test/database-access.test.ts` builds a
+Supabase-like database, with client roles and a table owner that is neither
+superuser nor `BYPASSRLS`. It checks that every normal service operation still
+works and that client roles can't read or write. It also fails if a later
+migration adds a table without RLS.
+
+Connect with `sslmode=require` in `DATABASE_URL`. postgres.js doesn't use TLS
+unless the URL asks for it.
+
+## User-submitted URLs (SSRF)
+
+**Phase 2: validate and store, never fetch.**
+
+- The shared `checkPublicHttpUrl` accepts only http(s) with a domain name. It
+  rejects credentials, non-standard ports, every IP literal (loopback, RFC 1918,
+  link-local, metadata, IPv6, numeric encodings), localhost and internal
+  suffixes.
+- The database also requires `^https?://`.
+- The link is stored on the report only. It isn't shown publicly and isn't
+  fetched.
+
+**Phase 3 (planned):** resolve DNS and reject private ranges at fetch time
+(defense against DNS rebinding), and fetch through Nimble rather than from
+Verity's network.
+
+## Output, XSS and headers
+
+**Frontend:**
+
+- React escaping everywhere; `dangerouslySetInnerHTML`, `innerHTML` and
+  `outerHTML` are banned by lint.
+- Hostile titles, quotes and links are tested to render as text.
+- Only http(s) links are rendered, with `noopener noreferrer`.
+- Production CSP meta tag: no inline or eval scripts (Zod runs jitless).
+  `connect-src` covers only the app itself, Maypop, the configured Verity API
+  and the basemap. IPv6-literal API URLs are refused at build time because CSP
+  can't express them.
+
+**API responses (Helmet plus hooks):**
+
+- `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`
+- `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`
+- `Permissions-Policy` denying geolocation, camera, microphone and payment
+- `Cache-Control: no-store`
+- HSTS in production; no `X-Powered-By`
+
+**Errors:** the only shape is `{ error: { code, message, request_id } }`. Stack
+traces, SQL and provider messages are logged server-side only. A forced
+database failure returns a generic 500 (tested).
+
+## Logging and privacy
+
+- **Structured JSON logs with a request id on every line.** A caller's
+  `X-Request-Id` is accepted only if well-formed.
+- **Never logged:**
+  - `Authorization` headers and cookies;
+  - tokens, sign-in codes and emails (redacted);
+  - request bodies and query strings, which may contain coordinates;
+  - raw IP addresses.
+- **Security events** are logged with outcome codes only: code requested or
+  rejected, origin rejected, manual transition, report created.
+- **Development sign-in codes** go to files in `apps/api/.data/dev-outbox/`,
+  never to logs. Production sends them by SMTP.
+
+## Location privacy
+
+- There is **no user-location table.** Browser geolocation is used only on the
+  device to center the map. It's rounded, kept in memory, and never stored or
+  sent.
+- The service sees only the viewport bbox being browsed, plus the pin a
+  reporter deliberately chooses (rounded to about 11 m).
+- **Signals store no location.** "Nearby confirmations" aren't implemented
+  until there is a privacy-preserving definition.
+- Community counts are aggregates. No identities, distances or reporter details
+  are ever returned publicly (tested).
+
+## Demo data
+
+- **Seeding** (`db:seed`) refuses production. Seeded events are `is_demo`
+  and use `.example` sources.
+- **Duplicate detection** never attaches real reports to demo events.
+- **The frontend** labels demo data on every screen. A production build never
+  falls back to demo data; when the service is down it says "Verity is
+  temporarily unavailable." (tested).
+
+## Remaining risks
+
+1. **Real Maypop not yet tested.** The cross-site iframe design was verified
+   locally with Maypop's sandbox flags, but not on real Maypop. After the first
+   publish:
+   - add the exact app origin to `VERITY_ALLOWED_ORIGINS`;
+   - confirm Maypop's own response headers don't block calls to the API;
+   - run the flow end to end (browse, sign in, report, confirm, follow, reload).
+2. **Bearer token in `localStorage`** is exposed to any script that runs in
+   the app's origin (see the trade-off above).
+3. **Email delivery and abuse.** Sign-in depends on an SMTP provider: set up
+   SPF, DKIM and DMARC for `AUTH_EMAIL_FROM`. Per-email and per-network limits
+   reduce code spam, but there is no CAPTCHA. Disposable addresses can create
+   accounts, so one person can hold several accounts.
+4. **Moderation.** There are no moderator tools yet beyond operator
+   transitions (for example to REJECTED). Abusive report text is stored and
+   shown as plain text.
+5. **No account deletion endpoint yet.** It's needed for data-protection
+   requests. Reports reference users with `ON DELETE RESTRICT`.
+6. **Better Auth** is a significant dependency. Its version is pinned, and only
+   the email-OTP and bearer features are used.
+7. **Unprocessed verification jobs.** `verification_jobs` aren't processed
+   until Phase 3. Events honestly show "verification queued".
+8. **Container image untested.** `apps/api/Dockerfile` has not been built here
+   (no Docker daemon).
+9. **ESLint 9 is end-of-life.** It's kept for `eslint-plugin-jsx-a11y`, and is
+   dev-only.
+
+## Reporting a vulnerability
+
+Please open a private security advisory on the GitHub repository rather than a
+public issue.
