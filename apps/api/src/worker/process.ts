@@ -205,6 +205,7 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
     let retrieval: Retrieval;
     let found: NormalizedEvidence[] = [];
     let note: string | null = null;
+    let stats: RetrievalResult["stats"] | null = null;
     if (!context.searchable) {
       retrieval = "not_attempted";
       note = "no_searchable_location";
@@ -220,6 +221,9 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
       if (result.status === "permanent_error") return await fail("permanent", result.errorCode ?? "search_rejected");
       retrieval = result.status;
       found = sanitizeEvidence(result.evidence);
+      stats = result.stats ?? null;
+      // A partial search (some queries failed) still applies what succeeded; record why.
+      if (result.errorCode) note = result.errorCode;
     }
 
     // Escalate only if ordinary evidence leaves a real question, and only once per run.
@@ -260,6 +264,10 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
         newSources: applied.newSourceIds.length,
         followUp: applied.followUp,
         note,
+        searches: stats?.performed ?? null,
+        results: stats?.results ?? null,
+        accepted: stats?.accepted ?? null,
+        usable: stats?.usable ?? null,
       },
       "verification applied",
     );

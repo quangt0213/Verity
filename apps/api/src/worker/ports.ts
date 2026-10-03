@@ -41,6 +41,8 @@ export interface RetrievalResult {
   /** Short machine code, never a provider message or body. */
   errorCode: string | null;
   retryAfterSeconds: number | null;
+  /** Cost/quality counters for analysis (logged by the worker). */
+  stats?: { queries: number; performed: number; succeeded: number; results: number; accepted: number; usable: number };
 }
 
 export interface EvidenceRetriever {

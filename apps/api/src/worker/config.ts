@@ -37,7 +37,12 @@ const workerEnvSchema = z.object({
   NIMBLE_AGENT_EVENT_COOLDOWN_HOURS: int(1, 168, 6),
   NIMBLE_AGENT_MAX_PER_EVENT: int(0, 10, 2),
   NIMBLE_AGENT_POLL_TIMEOUT_SECONDS: int(30, 600, 90),
+  GEOCODER_PROVIDER: z.enum(["none", "nominatim"]).default("none"),
+  GEOCODER_URL: z.string().optional(),
+  GEOCODER_USER_AGENT: z.string().optional(),
 });
+
+export const NOMINATIM_PUBLIC_URL = "https://nominatim.openstreetmap.org";
 
 export interface WorkerConfig {
   env: "development" | "test" | "production";
@@ -62,6 +67,8 @@ export interface WorkerConfig {
     agentMaxPerEvent: number;
     agentPollTimeoutSeconds: number;
   };
+  /** Reverse geocoding for search context. Off unless explicitly configured. */
+  geocoder: { provider: "nominatim"; url: string; userAgent: string } | null;
 }
 
 function checkBaseUrl(raw: string, production: boolean, problems: string[]): string {
@@ -103,6 +110,17 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     problems.push("VERIFICATION_LEASE_SECONDS must exceed NIMBLE_AGENT_POLL_TIMEOUT_SECONDS by at least 120");
   }
 
+  let geocoder: WorkerConfig["geocoder"] = null;
+  if (e.GEOCODER_PROVIDER === "nominatim") {
+    const url = (e.GEOCODER_URL ?? NOMINATIM_PUBLIC_URL).replace(/\/+$/, "");
+    const local = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(url);
+    if (!/^https:\/\/[^/@\s]+$/.test(url) && !(local && !production)) problems.push("GEOCODER_URL must be an https origin");
+    // Nominatim's usage policy requires an identifying User-Agent with a way to reach the operator.
+    const ua = e.GEOCODER_USER_AGENT?.trim() ?? "";
+    if (ua.length < 10 || !/(@|https?:\/\/)/.test(ua)) problems.push("GEOCODER_USER_AGENT must identify the application and include a contact (email or URL)");
+    geocoder = { provider: "nominatim", url, userAgent: ua };
+  }
+
   if (problems.length > 0) throw new ConfigError(`Refusing to start:\n- ${problems.join("\n- ")}`);
 
   const config: WorkerConfig = {
@@ -124,6 +142,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
       agentMaxPerEvent: e.NIMBLE_AGENT_MAX_PER_EVENT,
       agentPollTimeoutSeconds: e.NIMBLE_AGENT_POLL_TIMEOUT_SECONDS,
     },
+    geocoder,
   };
   // Keep the key and database URL out of anything that serializes the config (e.g. a log line).
   Object.defineProperty(config, "toJSON", {

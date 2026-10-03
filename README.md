@@ -149,8 +149,17 @@ npm run dev:worker                           # development (needs a postgres:// 
   across processes.
 - The worker needs Postgres. PGlite is single-process and belongs to the API
   in development.
-- Until the Nimble adapters land, the worker reports retrieval as unavailable
-  rather than inventing evidence.
+- With `NIMBLE_API_KEY` set, the worker searches through **Nimble Search**
+  (standard depth, at most 3 searches per job; see
+  `apps/api/src/providers/nimble/`). Without it, retrieval reports
+  "unavailable" rather than inventing evidence. The agent arrives in a later
+  stage.
+- Official and first-party sources are recognized from a reviewed, public
+  registry (`apps/api/src/verification/official-sources.ts`): change it by
+  pull request.
+- Reverse geocoding (Nominatim) is off unless `GEOCODER_PROVIDER=nominatim`.
+- `NIMBLE_LIVE_SMOKE=1 npm run smoke:nimble -w @verity/api` makes ONE live
+  search request, as an opt-in check. It never runs in `npm test`.
 - Apply migrations (through `0004`) before starting it.
 
 ### Frontend (Maypop, built from GitHub)

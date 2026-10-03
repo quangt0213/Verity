@@ -123,6 +123,9 @@ export interface SearchContext {
   locationTerms: string[];
   /** Where each term came from, aligned with locationTerms. */
   termSources: Array<"reporter" | "derived">;
+  /** The derived street and neighborhood, when known (for location matching). */
+  street: string | null;
+  neighborhood: string | null;
   city: string | null;
   region: string | null;
   countryCode: string | null;
@@ -171,6 +174,8 @@ export function buildSearchContext(input: SearchContextInput, place: SearchPlace
   return {
     locationTerms: terms,
     termSources: sources,
+    street: cleanTerm(place?.street),
+    neighborhood: cleanTerm(place?.neighborhood),
     city,
     region: cleanTerm(place?.region),
     countryCode: place?.countryCode && /^[A-Z]{2}$/.test(place.countryCode) ? place.countryCode : null,

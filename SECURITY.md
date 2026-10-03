@@ -304,6 +304,12 @@ database failure returns a generic 500 (tested).
   until there is a privacy-preserving definition.
 - Community counts are aggregates. No identities, distances or reporter details
   are ever returned publicly (tested).
+- **Nimble requests carry only event wording and place names.** Search
+  queries are built deterministically from the event's category, title and
+  location text (sanitized of search operators), plus derived place names.
+  They never include coordinates, reporter identity, email or account data
+  (tested). The reverse geocoder, when enabled, receives coordinates rounded
+  to a ~110 m cell, never the exact pin.
 - **Verification (Phase 3, in progress) uses third-party processors.** To find
   evidence, the verification worker sends an event's category, wording and
   location context to Nimble, and may resolve event coordinates to place names

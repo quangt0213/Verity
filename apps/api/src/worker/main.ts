@@ -5,6 +5,9 @@ import { ConfigError } from "../config";
 import { createDatabase } from "../db/client";
 import { loadWorkerConfig } from "./config";
 import { createWorker } from "./loop";
+import { createNimbleRetriever } from "../providers/nimble/retriever";
+import { createNominatimGeocoder } from "../providers/nominatim";
+import { durableGeocoder } from "./geocode-cache";
 import { unconfiguredInvestigator, unconfiguredRetriever } from "./ports";
 
 /**
@@ -12,9 +15,10 @@ import { unconfiguredInvestigator, unconfiguredRetriever } from "./ports";
  * process (dist/server.js): the API never starts verification work. Run one or
  * more of these alongside the API; job claiming is safe across processes.
  *
- * Providers arrive in later stages (Nimble search in S4, the agent in S5, a
- * geocoding provider with the durable cache). Until then retrieval reports
- * "unavailable" honestly and nothing is fabricated.
+ * Retrieval uses Nimble Search when NIMBLE_API_KEY is set; otherwise it
+ * reports "unavailable" honestly. Reverse geocoding (Nominatim) is used only
+ * when GEOCODER_PROVIDER is set, always through the durable cache. The agent
+ * investigator arrives in S5.
  */
 async function main() {
   let config;
@@ -49,13 +53,20 @@ async function main() {
   }
 
   const workerId = `w_${randomUUID().slice(0, 12)}`;
+  const now = () => new Date();
+  const retriever = config.nimble.apiKey
+    ? createNimbleRetriever({ apiKey: config.nimble.apiKey, baseUrl: config.nimble.baseUrl, now })
+    : unconfiguredRetriever;
+  const geocoder = config.geocoder
+    ? durableGeocoder(createNominatimGeocoder({ url: config.geocoder.url, userAgent: config.geocoder.userAgent, now }), database.db, { now })
+    : null;
   const worker = createWorker({
     db: database.db,
     config,
-    retriever: unconfiguredRetriever,
+    retriever,
     investigator: unconfiguredInvestigator,
-    geocoder: null,
-    now: () => new Date(),
+    geocoder,
+    now,
     log,
     workerId,
   });
@@ -68,7 +79,7 @@ async function main() {
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-  log.info({ workerId, concurrency: config.concurrency, retriever: unconfiguredRetriever.name }, "verification worker started");
+  log.info({ workerId, concurrency: config.concurrency, retriever: retriever.name, geocoder: geocoder?.provider ?? "none" }, "verification worker started");
   await worker.run(controller.signal);
   await database.close();
   log.info({ workerId }, "verification worker stopped");
