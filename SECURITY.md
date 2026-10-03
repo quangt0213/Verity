@@ -275,6 +275,12 @@ database failure returns a generic 500 (tested).
 
 ## Logging and privacy
 
+- **The verification worker** logs only ids, counts, outcomes and short error
+  codes: never provider messages or bodies, keys, emails or tokens. Its
+  configuration serializes with secrets redacted.
+- **The geocode cache** stores derived place names per provider and ~110 m
+  cell, never an exact pin, and no user, reporter or event identifiers.
+
 - **Structured JSON logs with a request id on every line.** A caller's
   `X-Request-Id` is accepted only if well-formed.
 - **Never logged:**

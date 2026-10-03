@@ -71,7 +71,7 @@ apps/api/             The Verity service (Fastify 5, Drizzle ORM, Postgres / PGl
   src/domain/         read model, reports, dedupe, signals, state machine, transitions, outbox
   src/routes/         public reads · auth · contributions · internal (operator) routes
   src/verification/   verification core (Phase 3, pure): evidence, URLs, lineage, policy, rules, explanations, geocoding
-  src/worker/         verification worker (Phase 3): configuration so far
+  src/worker/         verification worker process (Phase 3): claim/lease, runs, apply, sweep, ports (provider adapters pending)
   src/security/       CORS + origin guard, rate limiter, error handling
   test/               API tests against an in-memory Postgres
 docs/MAYPOP.md        What Maypop provides, and the identity decision
@@ -272,6 +272,7 @@ Phase 2 produces UNVERIFIED events plus operator transitions through
 | `event_state_transitions` | Audit of every status change | append-only, `from ≠ to`, reason required |
 | `verification_jobs` | Outbox for verification work (reasons: new report, attached report, community dispute, manual, `RECHECK`) | unique idempotency key, one open job per event, attempt bounds |
 | `verification_runs` | One logical run per job: provenance (counts, decision rule, transition, evidence ids) and retry safety for the single paid agent investigation | one per job; agent slot claimed before the call; ids, counts and short codes only |
+| `geocode_cache` | Derived place names per provider and ~110 m cell (reverse geocoding for search context) | status ok/no_result only; lifetimes from policy; no user, reporter or event data |
 | `rate_limit_counters` | Fixed-window limits | keys are HMACs (no raw email or IP) |
 
 ### API (`/api/v1`)

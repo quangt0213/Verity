@@ -43,9 +43,10 @@ export async function internalRoutes(app: FastifyInstance, { db, config }: AppDe
     const eventId = parseEventId(request.params);
     const input = parseInput(transitionInput, request.body);
     try {
-      const result = await db.transaction((tx) =>
+      const { from, to } = await db.transaction((tx) =>
         transitionEvent(tx, { eventId, to: input.to, reason: input.reason, actor: { type: "admin" }, expectedFrom: input.expected_from }),
       );
+      const result = { from, to };
       request.log.info({ audit: "manual_transition", eventId, ...result }, "manual status transition");
       return result;
     } catch (error) {

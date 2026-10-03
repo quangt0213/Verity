@@ -14,6 +14,7 @@
   "scripts": {
     "dev": "npm run dev -w @verity/web",
     "dev:api": "npm run dev -w @verity/api",
+    "dev:worker": "npm run dev:worker -w @verity/api",
     "build": "npm run build -w @verity/web && npm run build -w @verity/api",
     "build:web": "npm run build -w @verity/web",
     "preview": "npm run preview -w @verity/web",

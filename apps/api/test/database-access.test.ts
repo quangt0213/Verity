@@ -17,6 +17,7 @@ const VERITY_TABLES = [
   "event_state_transitions",
   "event_timeline",
   "events",
+  "geocode_cache",
   "rate_limit_counters",
   "reports",
   "source_records",
@@ -201,6 +202,11 @@ describe("Supabase-like hosted Postgres", () => {
       expect(await asClientRole(ctx.db, role, sql`update events set title = 'Rewritten'`), `${role} update events`).toBe("42501");
       expect(await asClientRole(ctx.db, role, sql`delete from event_follows`), `${role} delete follows`).toBe("42501");
       expect(await asClientRole(ctx.db, role, sql`select * from verification_runs`), `${role} select runs`).toBe("42501");
+      expect(await asClientRole(ctx.db, role, sql`select * from geocode_cache`), `${role} select geocode cache`).toBe("42501");
+      expect(
+        await asClientRole(ctx.db, role, sql`insert into geocode_cache (provider, cell_key, status, expires_at) values ('x', '1.000,1.000', 'no_result', now() + interval '1 day')`),
+        `${role} insert geocode cache`,
+      ).toBe("42501");
       expect(
         await asClientRole(ctx.db, role, sql`update verification_runs set agent_run_id = 'forged'`),
         `${role} update runs`,

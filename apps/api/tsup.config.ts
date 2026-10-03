@@ -4,7 +4,8 @@ import { defineConfig } from "tsup";
 // workspace) is compiled in; npm dependencies stay external and are installed
 // normally. Migrations ship alongside in ./drizzle.
 export default defineConfig({
-  entry: { server: "src/server.ts", migrate: "src/scripts/migrate.ts" },
+  // server (API) and worker (verification) are separate processes from one codebase.
+  entry: { server: "src/server.ts", worker: "src/worker/main.ts", migrate: "src/scripts/migrate.ts" },
   format: ["esm"],
   platform: "node",
   target: "node22",

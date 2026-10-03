@@ -6,10 +6,13 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=.env src/worker/main.ts",
     "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:concurrency": "vitest run test/concurrency",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env src/scripts/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env src/scripts/seed-dev.ts",

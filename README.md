@@ -136,8 +136,22 @@ A separate process from the same codebase that processes the
 `DATABASE_URL` and `NIMBLE_API_KEY`; everything else has conservative
 defaults (`apps/api/.env.example` lists the budgets and limits). It refuses to
 start in production without a key, or with a Nimble URL other than
-`https://sdk.nimbleway.com`. The worker entrypoint arrives in a later Phase 3
-stage.
+`https://sdk.nimbleway.com`.
+
+```sh
+npm run build -w @verity/api                 # → apps/api/dist/worker.js alongside server.js
+node apps/api/dist/worker.js                 # cwd apps/api; same image as the API, different command
+npm run dev:worker                           # development (needs a postgres:// DATABASE_URL)
+```
+
+- The API never starts verification work. Scale the API and the worker
+  independently; any number of workers can run, because job claiming is safe
+  across processes.
+- The worker needs Postgres. PGlite is single-process and belongs to the API
+  in development.
+- Until the Nimble adapters land, the worker reports retrieval as unavailable
+  rather than inventing evidence.
+- Apply migrations (through `0004`) before starting it.
 
 ### Frontend (Maypop, built from GitHub)
 

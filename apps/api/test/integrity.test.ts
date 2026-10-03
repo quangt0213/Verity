@@ -5,6 +5,7 @@ import {
   eventStateTransitions,
   events,
   eventTimeline,
+  geocodeCache,
   sourceRecords,
   verificationJobs,
   verificationRuns,
@@ -68,7 +69,8 @@ describe("transition service", () => {
     const result = await ctx.db.transaction((tx) =>
       transitionEvent(tx, { eventId, to: "DEVELOPING", reason: "Test: independent source found", actor: { type: "admin", userId } }),
     );
-    expect(result).toEqual({ from: "UNVERIFIED", to: "DEVELOPING" });
+    expect(result).toMatchObject({ from: "UNVERIFIED", to: "DEVELOPING" });
+    expect(result.transitionId).toMatch(/^[0-9a-f-]{36}$/);
 
     const audit = await ctx.db.select().from(eventStateTransitions).where(eq(eventStateTransitions.eventId, eventId));
     expect(audit.map((a) => [a.fromStatus, a.toStatus, a.actorType])).toEqual([
@@ -100,6 +102,8 @@ describe("transition service", () => {
       payload: { to: "REJECTED", reason: "Test: invalid report", expected_from: "DEVELOPING" },
     });
     expect(res.statusCode).toBe(200);
+    // The HTTP response stays exactly { from, to }: internal ids never leak.
+    expect(res.json()).toEqual({ from: "DEVELOPING", to: "REJECTED" });
     const invalid = await ctx.app.inject({
       method: "POST",
       url: `/internal/v1/events/${eventId}/transition`,
@@ -257,6 +261,19 @@ describe("database constraints", () => {
       .where(eq(verificationRuns.id, run!.id))
       .returning();
     expect(done!.evidenceIds).toEqual([evidenceId]);
+  });
+
+  it("keep the geocode cache to derived place data with valid cells, statuses and lifetimes", async () => {
+    const now = new Date();
+    const later = new Date(now.getTime() + 86_400_000);
+    const row = { provider: "probe", cellKey: "37.760,-122.419", status: "ok", city: "San Francisco", retrievedAt: now, expiresAt: later };
+    await ctx.db.insert(geocodeCache).values(row);
+    await expectViolation(ctx.db.insert(geocodeCache).values({ ...row, status: "error", city: null, cellKey: "1.000,1.000" }), "geocode_cache_status_valid");
+    await expectViolation(ctx.db.insert(geocodeCache).values({ ...row, status: "no_result", cellKey: "1.000,2.000" }), "geocode_cache_no_result_empty");
+    await expectViolation(ctx.db.insert(geocodeCache).values({ ...row, cellKey: "37.76012,-122.41891" }), "geocode_cache_cell_key_format");
+    await expectViolation(ctx.db.insert(geocodeCache).values({ ...row, cellKey: "2.000,2.000", countryCode: "usa" }), "geocode_cache_country_code_format");
+    await expectViolation(ctx.db.insert(geocodeCache).values({ ...row, cellKey: "3.000,3.000", expiresAt: now }), "geocode_cache_expiry_after_retrieval");
+    await expectViolation(ctx.db.insert(geocodeCache).values(row), "geocode_cache_provider_cell_key_pk");
   });
 
   it("reject non-http source URLs at the database level", async () => {

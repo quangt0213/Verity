@@ -512,6 +512,49 @@ export const verificationRuns = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Reverse-geocode cache: derived place names per ~110 m cell and provider.
+// No user, reporter, event or account data, and no raw provider responses.
+// ---------------------------------------------------------------------------
+
+export const GEOCODE_STATUSES = ["ok", "no_result"] as const;
+
+export const geocodeCache = pgTable(
+  "geocode_cache",
+  {
+    provider: text("provider").notNull(),
+    /** Rounded "lat,lng" cell from geocodeCacheKey(), e.g. "37.760,-122.419". */
+    cellKey: text("cell_key").notNull(),
+    /** "ok" or "no_result". Provider failures are never cached. */
+    status: text("status").notNull(),
+    street: text("street"),
+    neighborhood: text("neighborhood"),
+    city: text("city"),
+    region: text("region"),
+    countryCode: text("country_code"),
+    retrievedAt: timestamp("retrieved_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Lifetimes come from policy.ts (geocodeCache), never hardcoded here. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.provider, t.cellKey] }),
+    check("geocode_cache_status_valid", oneOf("status", GEOCODE_STATUSES)),
+    check(
+      "geocode_cache_no_result_empty",
+      sql`status = 'ok' OR (street IS NULL AND neighborhood IS NULL AND city IS NULL AND region IS NULL AND country_code IS NULL)`,
+    ),
+    check("geocode_cache_cell_key_format", sql`cell_key ~ '^-?[0-9]{1,2}\\.[0-9]{3},-?[0-9]{1,3}\\.[0-9]{3}$'`),
+    check("geocode_cache_country_code_format", sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`),
+    check("geocode_cache_provider_len", sql`char_length(provider) BETWEEN 1 AND 64`),
+    check(
+      "geocode_cache_place_len",
+      sql`(street IS NULL OR char_length(street) <= 120) AND (neighborhood IS NULL OR char_length(neighborhood) <= 120) AND (city IS NULL OR char_length(city) <= 120) AND (region IS NULL OR char_length(region) <= 120)`,
+    ),
+    check("geocode_cache_expiry_after_retrieval", sql`expires_at > retrieved_at`),
+    index("geocode_cache_expires_idx").on(t.expiresAt),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Rate limiting (fixed windows; keys are HMACs, never raw emails or IPs)
 // ---------------------------------------------------------------------------
 

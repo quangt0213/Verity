@@ -86,20 +86,20 @@ describe("upgrading a populated 0002 database to the current schema", () => {
     await migrate(db as never, { migrationsFolder: MIGRATIONS });
 
     const [applied] = await rows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(applied!.n).toBe(4);
+    expect(applied!.n).toBe(5);
     expect(await tableCounts(db)).toEqual(before);
     // The fixture really had data in every affected table.
     expect(Math.min(before.events, before.reports, before.sources, before.jobs)).toBeGreaterThan(0);
   });
 
-  it("protects the new table like every other Verity table", async () => {
+  it.each(["verification_runs", "geocode_cache"])("protects the new table %s like every other Verity table", async (name) => {
     const [table] = await rows<{ rls: boolean; owner: string; anon: boolean; authenticated: boolean }>(
       db,
       sql`select c.relrowsecurity as rls, pg_get_userbyid(c.relowner) as owner,
-                 has_table_privilege('anon', 'public.verification_runs', 'SELECT') as anon,
-                 has_table_privilege('authenticated', 'public.verification_runs', 'SELECT') as authenticated
+                 has_table_privilege('anon', c.oid, 'SELECT') as anon,
+                 has_table_privilege('authenticated', c.oid, 'SELECT') as authenticated
           from pg_class c join pg_namespace n on n.oid = c.relnamespace
-          where n.nspname = 'public' and c.relname = 'verification_runs'`,
+          where n.nspname = 'public' and c.relname = ${name}`,
     );
     expect(table).toEqual({ rls: true, owner: "verity_service", anon: false, authenticated: false });
   });

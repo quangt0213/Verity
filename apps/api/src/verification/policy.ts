@@ -49,6 +49,18 @@ export interface VerificationPolicy {
     /** Texts with fewer distinct tokens are too short to call duplicates. */
     nearDuplicateMinTokens: number;
   };
+  /** Transient-failure retries: base · factor^(attempt-1) seconds, capped, ± jitter. */
+  retry: { baseSeconds: number; factor: number; maxSeconds: number; jitterRatio: number };
+  /** A job deferred for budget waits until the budget window resets, but never less than this. */
+  budgetDeferMinMinutes: number;
+  /** Reverse-geocode cache lifetimes (providers such as public Nominatim require caching). */
+  geocodeCache: { okTtlDays: number; noResultTtlDays: number };
+  /** Quiet periods so frequent rechecks don't flood the user-facing timeline (verification_runs keeps everything). */
+  timeline: { checkedQuietMinutes: number; unavailableQuietMinutes: number; maxSourceNamesPerEntry: number };
+  /** The no-cost aging sweep. */
+  sweep: { intervalMinutes: number; batchSize: number };
+  /** Timeouts for external calls made by the worker. */
+  external: { searchTimeoutSeconds: number; geocodeTimeoutSeconds: number; agentPollIntervalSeconds: number };
   rules: {
     /** Independent external lineages that verify an event without a primary official source. */
     verifiedMinIndependent: number;
@@ -87,6 +99,12 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   outdatedLeadMinutes: h(6),
   recheckMinutes: { unconfirmed: 15, unconfirmedAfter2h: 60, confirmed: 30, contested: 20 },
   lineage: { nearDuplicateSimilarity: 0.6, nearDuplicateMinTokens: 12 },
+  retry: { baseSeconds: 30, factor: 4, maxSeconds: 30 * 60, jitterRatio: 0.2 },
+  budgetDeferMinMinutes: 15,
+  geocodeCache: { okTtlDays: 90, noResultTtlDays: 7 },
+  timeline: { checkedQuietMinutes: h(6), unavailableQuietMinutes: h(3), maxSourceNamesPerEntry: 3 },
+  sweep: { intervalMinutes: 5, batchSize: 100 },
+  external: { searchTimeoutSeconds: 30, geocodeTimeoutSeconds: 10, agentPollIntervalSeconds: 5 },
   rules: { verifiedMinIndependent: 2, likelyMinLineages: 2, resolvedMinIndependent: 2 },
 };
 
@@ -126,19 +144,24 @@ function hasSchedule(event: TimedEvent): event is TimedEvent & { scheduledStartA
   return CATEGORY_KIND[event.category] === "planned" && event.scheduledStartAt !== null;
 }
 
-/** When a scheduled event is over (end, or start if no end is known, plus grace). */
+/**
+ * When a scheduled event is over: its KNOWN scheduled end plus grace. Null when
+ * no end is known: an end is never inferred from the start time or from old
+ * evidence.
+ */
 export function scheduledOverAt(event: TimedEvent, policy: VerificationPolicy = DEFAULT_POLICY): Date | null {
-  if (!hasSchedule(event)) return null;
-  const end = event.scheduledEndAt ?? event.scheduledStartAt;
-  return new Date(end.getTime() + policy.planned.endGraceMinutes * 60_000);
+  if (!hasSchedule(event) || !event.scheduledEndAt) return null;
+  return new Date(event.scheduledEndAt.getTime() + policy.planned.endGraceMinutes * 60_000);
 }
 
 export function freshness(e: TimedEvidence, event: TimedEvent, now: Date, policy: VerificationPolicy = DEFAULT_POLICY): Freshness {
   const at = evidenceTime(e);
   if (!at) return "unknown";
   if (hasSchedule(event)) {
-    const over = scheduledOverAt(event, policy)!;
-    if (now > over) return "stale";
+    const over = scheduledOverAt(event, policy);
+    if (over && now > over) return "stale";
+    // Start known, end unknown: long after the start, coverage is no longer current.
+    if (!over && minutesBetween(now, event.scheduledStartAt) > policy.categories[event.category].staleMinutes) return "stale";
     const earliest = event.scheduledStartAt.getTime() - policy.planned.announcementLeadDays * 24 * 60 * 60_000;
     return at.getTime() >= earliest ? "fresh" : "stale";
   }
@@ -190,8 +213,35 @@ export function recheckDelayMinutes(
 /** Whether scheduled rechecks should still run for this event. */
 export function withinRecheckAge(event: TimedEvent, now: Date, policy: VerificationPolicy = DEFAULT_POLICY): boolean {
   if (hasSchedule(event)) {
-    const over = scheduledOverAt(event, policy)!;
-    return now.getTime() <= over.getTime() + policy.planned.recheckAfterEndHours * 60 * 60_000;
+    const over = scheduledOverAt(event, policy);
+    if (over) return now.getTime() <= over.getTime() + policy.planned.recheckAfterEndHours * 60 * 60_000;
+    return minutesBetween(now, event.scheduledStartAt) <= policy.categories[event.category].maxRecheckAgeHours * 60;
   }
   return minutesBetween(now, event.firstSeenAt) <= policy.categories[event.category].maxRecheckAgeHours * 60;
+}
+
+/** Delay before retry number `attempt` (1-based) of a transient failure, honoring a provider's Retry-After. */
+export function retryDelaySeconds(
+  attempt: number,
+  retryAfterSeconds: number | null = null,
+  random: () => number = Math.random,
+  policy: VerificationPolicy = DEFAULT_POLICY,
+): number {
+  const r = policy.retry;
+  const base = Math.min(r.maxSeconds, r.baseSeconds * r.factor ** Math.max(0, attempt - 1));
+  const jittered = base * (1 - r.jitterRatio + 2 * r.jitterRatio * random());
+  return Math.round(Math.min(r.maxSeconds, Math.max(jittered, retryAfterSeconds ?? 0, 1)));
+}
+
+/** When a deferred job may be claimed again: the next UTC budget day, and never sooner than the minimum deferral. */
+export function budgetResumeAt(now: Date, policy: VerificationPolicy = DEFAULT_POLICY): Date {
+  const nextDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  const minimum = new Date(now.getTime() + policy.budgetDeferMinMinutes * 60_000);
+  return nextDay > minimum ? nextDay : minimum;
+}
+
+/** Expiry of a cached reverse-geocode result. */
+export function geocodeExpiresAt(status: "ok" | "no_result", retrievedAt: Date, policy: VerificationPolicy = DEFAULT_POLICY): Date {
+  const days = status === "ok" ? policy.geocodeCache.okTtlDays : policy.geocodeCache.noResultTtlDays;
+  return new Date(retrievedAt.getTime() + days * 24 * 60 * 60_000);
 }

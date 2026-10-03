@@ -44,12 +44,13 @@ export async function recordCreation(tx: Tx, eventId: string, reason: string, ac
  * The one place an event's status changes. It validates the edge and the
  * actor, applies the change with optimistic concurrency (expected current
  * status), writes the audit row and the user-facing timeline entry, all in the
- * caller's transaction.
+ * caller's transaction. `timelineDetail` is the user-facing text (defaults to
+ * the audit reason).
  */
 export async function transitionEvent(
   tx: Tx,
-  input: { eventId: string; to: EventStatus; reason: string; actor: Actor; expectedFrom?: EventStatus },
-): Promise<{ from: EventStatus; to: EventStatus }> {
+  input: { eventId: string; to: EventStatus; reason: string; actor: Actor; expectedFrom?: EventStatus; timelineDetail?: string },
+): Promise<{ from: EventStatus; to: EventStatus; transitionId: string }> {
   const [current] = await tx
     .select({ status: events.status })
     .from(events)
@@ -78,23 +79,27 @@ export async function transitionEvent(
   await allowStatusWrite(tx, false);
   if (updated.length !== 1) throw new TransitionError("Event changed concurrently", "conflict");
 
-  await tx.insert(eventStateTransitions).values({
-    eventId: input.eventId,
-    fromStatus: from,
-    toStatus: input.to,
-    reason: input.reason,
-    actorType: input.actor.type,
-    actorUserId: input.actor.userId ?? null,
-  });
+  const [audit] = await tx
+    .insert(eventStateTransitions)
+    .values({
+      eventId: input.eventId,
+      fromStatus: from,
+      toStatus: input.to,
+      reason: input.reason,
+      actorType: input.actor.type,
+      actorUserId: input.actor.userId ?? null,
+      createdAt: now,
+    })
+    .returning({ id: eventStateTransitions.id });
   await tx.insert(eventTimeline).values({
     eventId: input.eventId,
     at: now,
     kind: "status_changed",
     label: `Status changed to ${STATUS_LABEL[input.to]}`,
-    detail: input.reason,
+    detail: (input.timelineDetail ?? input.reason).slice(0, 1000),
     fromStatus: from,
     toStatus: input.to,
     actorType: input.actor.type,
   });
-  return { from, to: input.to };
+  return { from, to: input.to, transitionId: audit!.id };
 }
