@@ -70,6 +70,7 @@ apps/api/             The Verity service (Fastify 5, Drizzle ORM, Postgres / PGl
   src/auth/           Better Auth setup, identity resolution, mailers
   src/domain/         read model, reports, dedupe, signals, state machine, transitions, outbox
   src/routes/         public reads · auth · contributions · internal (operator) routes
+  src/verification/   verification core (Phase 3, pure): evidence, URLs, lineage, policy, rules, explanations, geocoding
   src/worker/         verification worker (Phase 3): configuration so far
   src/security/       CORS + origin guard, rate limiter, error handling
   test/               API tests against an in-memory Postgres
@@ -308,7 +309,7 @@ server-side and add validation and rate limits.
 **Why bearer tokens instead of cookies:** see SECURITY.md under the cookie,
 CORS and CSRF analysis.
 
-## 5. Verification engine (planned, Phase 3)
+## 5. Verification engine (Phase 3: pure core implemented; worker pending)
 
 AI acquires and describes evidence. A **deterministic, unit-tested rules
 engine** decides state transitions. The agent's recommendation is an input,
@@ -330,13 +331,31 @@ stateDiagram-v2
   UNVERIFIED --> REJECTED: credible contradiction, no support
 ```
 
-Rules the engine will enforce, each covered by a test:
+The pure core lives in `apps/api/src/verification/` (no database or network):
+`evidence.ts` (the provider-neutral `NormalizedEvidence` contract and its
+mapping to `source_records`), `url.ts` (conservative canonical URLs,
+publisher identity via the Public Suffix List), `attribution.ts` and
+`lineage.ts` (independence), `policy.ts` (the single, configurable freshness
+and threshold policy, whose values are initial heuristics to calibrate),
+`rules.ts` (the ordered rule table and `decide()`), `explain.ts` (fixed
+explanation templates) and `geocoding.ts` (the reverse-geocoder interface and
+derived search context).
 
-- One anonymous community report cannot produce VERIFIED.
-- Independence counts **lineages**, not URLs. Lineages are grouped by origin
-  domain, near-duplicate excerpt text (shingle similarity) and explicit
-  attribution ("according to …"). Ten syndicated copies of one press release
-  count as one.
+Rules the engine enforces, each covered by a test:
+
+- Community reports alone cannot produce VERIFIED: they form one lineage and
+  never count as external support.
+- No results, timeouts and provider outages are not evidence; they change only
+  the explanation.
+- Independence counts **lineages**, not URLs and not publishers. Records are
+  related only by explainable links: the same canonical URL, the same origin
+  metadata, syndication, explicit attribution ("according to …"), or
+  near-duplicate text. **Publisher identity alone never relates two records**:
+  two articles from one newspaper can be independent, while different
+  publishers repeating one wire story are one lineage. Each grouping stores
+  its reason.
+- REJECTED requires a primary official contradiction and no qualifying support,
+  and only applies to unconfirmed events.
 - Recent official primary evidence can establish a claim strongly. A source
   class is one input, not a verdict: official pages can be outdated, and social
   posts can be the earliest primary report.
