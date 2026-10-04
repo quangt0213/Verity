@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_OUTPUT_SCHEMA, createNimbleInvestigator, parseAgentResult } from "../../src/providers/nimble/agent";
+import { agentEvidence } from "../../src/verification/agent-evidence";
 import { buildSearchContext } from "../../src/verification/geocoding";
 import type { EventForRetrieval } from "../../src/worker/ports";
 import { json, mockFetch } from "./mock-fetch";
@@ -112,6 +113,42 @@ describe("Nimble agent client: poll", () => {
     expect(text?.proposals).toEqual([]);
     expect(parseAgentResult({ nothing: true })).toBeNull();
     expect(parseAgentResult(result({ trust: { claims: [{ citations: "not an array" }] } }))?.citations).toEqual([]);
+  });
+});
+
+describe("the live low-effort response shape (S6A, observed 2026-10-04)", () => {
+  /** Shape seen live: claims only on "$.sources[N].url", sources with only a url, citations with excerpts: null. */
+  const live = {
+    run: { id: "task_run_live", status: "completed" },
+    output: {
+      type: "json",
+      content: { sources: [1, 2, 3].map((n) => ({ url: `https://site-${n}.example/page` })) },
+      trust: {
+        confidence: "medium",
+        reasoning: "…",
+        sources: [1, 2, 3].map((n) => ({ url: `https://site-${n}.example/page`, title: "Title", type: "secondary", source_category: "news", source_intent: null, extract_template_name: null })),
+        claims: [1, 2, 3].map((n) => ({
+          path: `$.sources[${n - 1}].url`,
+          confidence: "medium",
+          reasoning: "…",
+          citations: [{ url: `https://site-${n}.example/page`, title: "Title", excerpts: null, source_category: "news", source_intent: "news", source_type: "secondary", extract_template_name: null }],
+        })),
+      },
+    },
+  };
+
+  it("parses URL-only citations as citations with no text, and no date proposals", () => {
+    const parsed = parseAgentResult(live)!;
+    expect(parsed.citations).toHaveLength(3);
+    expect(parsed.citations.every((c) => c.excerpts.length === 0 && c.title === "Title")).toBe(true);
+    expect(parsed.proposals).toEqual([1, 2, 3].map((n) => ({ url: `https://site-${n}.example/page`, publishedAt: null, eventTime: null })));
+  });
+
+  it("turns none of them into direct evidence: they are only pages Verity may read", () => {
+    const parsed = parseAgentResult(live)!;
+    const out = agentEvidence({ citations: parsed.citations, proposals: parsed.proposals, category: "parking_traffic", context, now: NOW, runId: "task_run_live" });
+    expect(out.evidence).toEqual([]);
+    expect(out.excerptless.map((e) => e.url)).toEqual([1, 2, 3].map((n) => `https://site-${n}.example/page`));
   });
 });
 

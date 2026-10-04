@@ -46,7 +46,37 @@ function describeShape(body: unknown): Record<string, unknown> {
     claimKeys: [...new Set(claims.flatMap((c) => keysOf(c) ?? []))].sort(),
     citationKeys: [...new Set(citations.flatMap((c) => keysOf(c) ?? []))].sort(),
     citationExcerptKinds: count(citations.map((c) => kind(c.excerpts))),
+    // Per-field value types and string lengths (never the text itself).
+    citationFields: fieldProfile(citations),
+    citationExcerptLengths: lengthStats(citations.flatMap((c) => (Array.isArray(c.excerpts) ? c.excerpts.filter((e): e is string => typeof e === "string").map((e) => e.length) : []))),
+    claimFields: fieldProfile(claims),
+    claimPathShapes: [...new Set(claims.map((c) => (typeof c.path === "string" ? c.path.replace(/\d+/g, "N").slice(0, 60) : kind(c.path))))].slice(0, 15),
+    claimsWithCitations: claims.filter((c) => Array.isArray(c.citations) && c.citations.length > 0).length,
+    trustSourceCount: Array.isArray(trust?.sources) ? (trust!.sources as unknown[]).length : null,
+    trustSourceFields: fieldProfile(Array.isArray(trust?.sources) ? (trust!.sources as Array<Record<string, unknown>>) : []),
+    outputSourceFields: fieldProfile((sources ?? []) as Array<Record<string, unknown>>),
+    uniqueCitationUrls: new Set(citations.map((c) => c.url).filter((u) => typeof u === "string")).size,
   };
+}
+
+function lengthStats(lengths: number[]) {
+  if (lengths.length === 0) return null;
+  return { n: lengths.length, min: Math.min(...lengths), max: Math.max(...lengths), avg: Math.round(lengths.reduce((a, b) => a + b, 0) / lengths.length) };
+}
+
+/** For every key seen on a list of objects: how often each value type occurs, and string lengths. */
+function fieldProfile(items: Array<Record<string, unknown>>): Record<string, unknown> {
+  const out: Record<string, { kinds: Record<string, number>; stringLengths?: ReturnType<typeof lengthStats>; arrayLengths?: ReturnType<typeof lengthStats> }> = {};
+  const keys = [...new Set(items.flatMap((i) => (i && typeof i === "object" ? Object.keys(i) : [])))].sort();
+  for (const key of keys) {
+    const values = items.map((i) => (i && typeof i === "object" ? i[key] : undefined));
+    const kinds: Record<string, number> = {};
+    for (const v of values) kinds[kind(v)] = (kinds[kind(v)] ?? 0) + 1;
+    const strings = values.filter((v): v is string => typeof v === "string").map((v) => v.length);
+    const arrays = values.filter(Array.isArray).map((v) => v.length);
+    out[key] = { kinds, ...(strings.length ? { stringLengths: lengthStats(strings) } : {}), ...(arrays.length ? { arrayLengths: lengthStats(arrays) } : {}) };
+  }
+  return out;
 }
 
 async function main() {

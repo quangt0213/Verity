@@ -169,6 +169,27 @@ describe("citations without verbatim text (as the live low-effort run returned)"
   });
 });
 
+describe("the Extract ceiling is shared with the Agent stage", () => {
+  it("does not read URL-only Agent citations when pre-Agent extraction used all 4 slots, and records why", async () => {
+    const clock = new FakeClock();
+    const eventId = await newEvent(ctx, reporter());
+    const searchUrls = [1, 2, 3, 4, 5].map((n) => `https://paper-${n}-${clock.now().getTime()}.example/story`);
+    const retriever = fakeRetriever(() =>
+      results.found(searchUrls.map((url, i) => newsAt(clock, { canonicalUrl: url, publisherDomain: null, excerpt: null, stance: "context", locationMatch: "exact", publishedAt: null, publishedAtPrecision: null, title: `Story ${i}` }))),
+    );
+    const pages = Object.fromEntries(searchUrls.map((url, i) => [url, pageRead(url, `Report ${i}: lanes of Test St remain closed, witness ${i} said near block ${i * 17}.`, clock.ago(5 + i))]));
+    const agentUrl = caltrans(clock);
+    const extractor = fakeExtractor(pages);
+    const investigator = fakeInvestigator({ poll: () => ({ status: "completed", citations: [{ url: agentUrl, title: "Test St", excerpts: [], providerCategory: "official", providerSourceType: "primary" }], proposals: [] }) });
+    await processJob(deps(ctx, clock, { retriever, investigator, extractor }), await claimFor(ctx, clock, eventId));
+    expect(investigator.starts).toBe(1);
+    expect(extractor.urls).toHaveLength(4);
+    expect(extractor.urls).not.toContain(agentUrl);
+    expect((await runsFor(ctx, eventId))[0]).toMatchObject({ extractCount: 4, agentRunCount: 1, errorCode: "agent_citations_unread_ceiling" });
+    expect((await stored(eventId)).map((r) => r.sourceUrl)).not.toContain(agentUrl);
+  });
+});
+
 describe("run lifecycle: reuse, fail closed, cleanup", () => {
   it("saves the run with its agent resource, and polls that same run on a retry", async () => {
     const clock = new FakeClock();

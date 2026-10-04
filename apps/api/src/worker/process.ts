@@ -254,6 +254,7 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
         agentTimesProposed: agentStats?.proposedTimes ?? null,
         agentTimesAccepted: agentStats?.acceptedTimes ?? null,
         agentReextracted: agentStats?.reextracted ?? null,
+        agentCitationsUnreadForCeiling: agentStats?.unreadForCeiling ?? null,
         results: stats?.results ?? null,
         accepted: stats?.accepted ?? null,
         usable: stats?.usable ?? null,

@@ -143,7 +143,7 @@ export interface AgentEvidenceUse {
   found: NormalizedEvidence[];
   /** Pages read to check claims the citations didn't establish. */
   extracts: number;
-  stats: ReturnType<typeof agentEvidence>["stats"] & { unsupported: number; reextracted: number; establishedByPage: number; pagesFromCitations: number };
+  stats: ReturnType<typeof agentEvidence>["stats"] & { unsupported: number; reextracted: number; establishedByPage: number; pagesFromCitations: number; unreadForCeiling: number };
   note: string | null;
 }
 
@@ -192,7 +192,9 @@ export async function useAgentResult(
   const placeholders = result.excerptless
     .filter((c) => !known.has(c.url))
     .map((c) => citedPageTarget(c, { category: input.event.category, context: input.context, now, runId: input.outcome.ref.runId }));
-  const targets = selectExtractCandidates({ found: [...needing, ...placeholders], stored: input.stored, max: input.extractsLeft, policy });
+  // The Extract ceiling is shared with the pre-Agent stage: no extra reads are granted after the Agent.
+  const wanted = selectExtractCandidates({ found: [...needing, ...placeholders], stored: input.stored, max: Number.MAX_SAFE_INTEGER, policy });
+  const targets = wanted.slice(0, Math.max(0, input.extractsLeft));
   let pagesFromCitations = 0;
   let extracts = 0;
   let establishedByPage = 0;
@@ -238,5 +240,8 @@ export async function useAgentResult(
       pagesFromCitations += 1;
     }
   }
-  return { found, extracts, stats: { ...result.stats, unsupported: result.unsupported.length, reextracted: extracts, establishedByPage, pagesFromCitations }, note };
+  // Recorded honestly: cited pages that deserved a read but didn't fit in the job's remaining ceiling.
+  const unreadForCeiling = Math.max(0, wanted.length - targets.length);
+  if (unreadForCeiling > 0) note ??= "agent_citations_unread_ceiling";
+  return { found, extracts, stats: { ...result.stats, unsupported: result.unsupported.length, reextracted: extracts, establishedByPage, pagesFromCitations, unreadForCeiling }, note };
 }
