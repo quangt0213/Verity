@@ -480,6 +480,16 @@ export const verificationRuns = pgTable(
     agentRequestedAt: timestamp("agent_requested_at", { withTimezone: true }),
     /** Nimble's run id, saved as soon as Nimble returns it. */
     agentRunId: text("agent_run_id"),
+    /** Page extractions across all attempts of this run (counted before each call, like searches). */
+    extractCount: integer("extract_count").notNull().default(0),
+    /**
+     * The provider resource the investigation created (Nimble creates a
+     * persistent agent per run), saved with the run id: needed to poll the run
+     * and to clean the resource up afterwards.
+     */
+    agentId: text("agent_id"),
+    /** When that resource was cleaned up (deactivated); null while it still exists or cleanup failed. */
+    agentCleanedUpAt: timestamp("agent_cleaned_up_at", { withTimezone: true }),
     escalationReason: text("escalation_reason"),
     decisionRuleId: text("decision_rule_id"),
     transitionId: uuid("transition_id").references(() => eventStateTransitions.id, { onDelete: "restrict" }),
@@ -502,6 +512,11 @@ export const verificationRuns = pgTable(
     check("verification_runs_agent_claim_consistent", sql`(agent_run_count = 1) = (agent_requested_at IS NOT NULL)`),
     check("verification_runs_agent_id_requires_claim", sql`agent_run_id IS NULL OR agent_requested_at IS NOT NULL`),
     check("verification_runs_agent_id_len", sql`agent_run_id IS NULL OR char_length(agent_run_id) BETWEEN 1 AND 128`),
+    check("verification_runs_extract_count_range", sql`extract_count BETWEEN 0 AND 50`),
+    check("verification_runs_agent_resource_len", sql`agent_id IS NULL OR char_length(agent_id) BETWEEN 1 AND 128`),
+    // The resource id arrives with the run id (never alone); cleanup can only follow a known resource.
+    check("verification_runs_agent_resource_with_run", sql`agent_id IS NULL OR agent_run_id IS NOT NULL`),
+    check("verification_runs_cleanup_requires_resource", sql`agent_cleaned_up_at IS NULL OR agent_id IS NOT NULL`),
     check("verification_runs_escalation_len", sql`escalation_reason IS NULL OR char_length(escalation_reason) BETWEEN 1 AND 64`),
     check("verification_runs_rule_len", sql`decision_rule_id IS NULL OR char_length(decision_rule_id) BETWEEN 1 AND 64`),
     check("verification_runs_error_len", sql`error_code IS NULL OR char_length(error_code) BETWEEN 1 AND 64`),

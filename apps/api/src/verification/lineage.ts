@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { jaccard, textTokens } from "@verity/contracts";
 import { ownOriginKeys } from "./attribution";
 import { evidenceKey, type EvidenceRecord, type LineageReason, type NormalizedEvidence } from "./evidence";
-import { DEFAULT_POLICY, evidenceTime, type VerificationPolicy } from "./policy";
+import { DEFAULT_POLICY, evidenceBounds, type VerificationPolicy } from "./policy";
 
 /**
  * Evidence lineage: which records trace back to the same origin, so they count
@@ -61,6 +61,10 @@ function linkBetween(
   ctx: { origins: Map<NormalizedEvidence, Set<string>>; tokens: Map<NormalizedEvidence, Set<string>>; policy: VerificationPolicy },
 ): Link | null {
   if (a.canonicalUrl && a.canonicalUrl === b.canonicalUrl) return { reason: "canonical_url", via: null };
+  // A page reached by redirect is the same resource as a record stored under that final URL.
+  if ((a.finalUrl && a.finalUrl === b.canonicalUrl) || (b.finalUrl && b.finalUrl === a.canonicalUrl) || (a.finalUrl && a.finalUrl === b.finalUrl)) {
+    return { reason: "canonical_url", via: null };
+  }
   if (a.originRef && a.originRef === b.originRef) return { reason: "same_origin_metadata", via: a.originRef };
 
   // Shared attributed origin, or one record attributes to what the other IS.
@@ -84,11 +88,12 @@ function linkBetween(
 }
 
 /** Representative preference: primary, then official/first-party, then earliest (event or publication) time, then earliest retrieval. */
-function representativeOrder(a: NormalizedEvidence, b: NormalizedEvidence, keyA: string, keyB: string): number {
+function representativeOrder(a: NormalizedEvidence, b: NormalizedEvidence, keyA: string, keyB: string, policy: VerificationPolicy): number {
   if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
   if (CLASS_RANK[a.sourceClass] !== CLASS_RANK[b.sourceClass]) return CLASS_RANK[a.sourceClass] - CLASS_RANK[b.sourceClass];
-  const ta = evidenceTime(a)?.getTime() ?? Number.POSITIVE_INFINITY;
-  const tb = evidenceTime(b)?.getTime() ?? Number.POSITIVE_INFINITY;
+  // Earliest POSSIBLE time: a date-only value is not assumed to be later in its day than it may be.
+  const ta = evidenceBounds(a, policy)?.earliest ?? Number.POSITIVE_INFINITY;
+  const tb = evidenceBounds(b, policy)?.earliest ?? Number.POSITIVE_INFINITY;
   if (ta !== tb) return ta - tb;
   if (a.retrievedAt.getTime() !== b.retrievedAt.getTime()) return a.retrievedAt.getTime() - b.retrievedAt.getTime();
   return keyA < keyB ? -1 : keyA > keyB ? 1 : 0;
@@ -143,7 +148,7 @@ export function assignLineages(records: NormalizedEvidence[], policy: Verificati
         stack.push(to);
       }
     }
-    component.sort((a, b) => representativeOrder(records[a]!, records[b]!, keys[a]!, keys[b]!));
+    component.sort((a, b) => representativeOrder(records[a]!, records[b]!, keys[a]!, keys[b]!, policy));
     const root = component[0]!;
     const lineageId = lineageIdFor(keys[root]!);
 
@@ -179,7 +184,7 @@ export function assignLineages(records: NormalizedEvidence[], policy: Verificati
   const community = records
     .map((r, i) => ({ r, i }))
     .filter(({ r }) => r.sourceType === "community_report")
-    .sort((a, b) => representativeOrder(a.r, b.r, keys[a.i]!, keys[b.i]!));
+    .sort((a, b) => representativeOrder(a.r, b.r, keys[a.i]!, keys[b.i]!, policy));
   community.forEach(({ r, i }, position) => {
     out[i] = {
       ...r,

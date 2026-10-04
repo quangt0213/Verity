@@ -38,6 +38,7 @@ describe("NormalizedEvidence ↔ source_records", () => {
       publisherDomain: "news.example",
       title: "Mission St closed",
       eventTimeAsReported: hoursAgo(1),
+      eventTimePrecision: "instant",
       excerpt: "Northbound lanes are closed, according to Caltrans.",
       note: "Article describes a closure at the reported intersection.",
       attributions: detectAttributions("according to Caltrans"),

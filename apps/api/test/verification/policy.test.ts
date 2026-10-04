@@ -2,7 +2,7 @@ import { CATEGORY_KIND, EVENT_CATEGORIES } from "@verity/contracts";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_POLICY,
-  evidenceTime,
+  evidenceTimeOf,
   freshness,
   recheckDelayMinutes,
   timeMatch,
@@ -13,7 +13,13 @@ import { hoursAgo, minutesAgo, minutesFromNow, NOW } from "./factories";
 
 const crash: TimedEvent = { category: "crash", firstSeenAt: minutesAgo(30), scheduledStartAt: null, scheduledEndAt: null };
 const closure: TimedEvent = { ...crash, category: "road_closure" };
-const at = (published: Date | null, eventTime: Date | null = null) => ({ publishedAt: published, eventTimeAsReported: eventTime, retrievedAt: NOW });
+const at = (published: Date | null, eventTime: Date | null = null) => ({
+  publishedAt: published,
+  publishedAtPrecision: published ? ("instant" as const) : null,
+  eventTimeAsReported: eventTime,
+  eventTimePrecision: eventTime ? ("instant" as const) : null,
+  retrievedAt: NOW,
+});
 
 describe("verification policy", () => {
   it("defines ordered windows for every category, in one place", () => {
@@ -33,7 +39,7 @@ describe("verification policy", () => {
   });
 
   it("never uses retrieval time: without event or publication time, evidence is never fresh", () => {
-    expect(evidenceTime(at(null))).toBeNull();
+    expect(evidenceTimeOf(at(null))).toBeNull();
     expect(freshness(at(null), crash, NOW)).toBe("unknown");
     expect(timeMatch(at(null), crash, NOW)).toBe("unclear");
   });

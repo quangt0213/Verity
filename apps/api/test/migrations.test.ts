@@ -86,7 +86,7 @@ describe("upgrading a populated 0002 database to the current schema", () => {
     await migrate(db as never, { migrationsFolder: MIGRATIONS });
 
     const [applied] = await rows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(applied!.n).toBe(5);
+    expect(applied!.n).toBe(6);
     expect(await tableCounts(db)).toEqual(before);
     // The fixture really had data in every affected table.
     expect(Math.min(before.events, before.reports, before.sources, before.jobs)).toBeGreaterThan(0);
@@ -116,5 +116,19 @@ describe("upgrading a populated 0002 database to the current schema", () => {
           where source_url is not null group by 1, 2 having count(*) > 1) d`,
     );
     expect(dupes!.n).toBe(0);
+  });
+
+  it("0005 adds the extraction counter and agent-resource columns, with their constraints, to existing runs", async () => {
+    const [job] = await rows<{ id: string; event_id: string }>(db, sql`select id, event_id from verification_jobs limit 1`);
+    const [run] = await rows<{ id: string; extract_count: number; agent_id: string | null; agent_cleaned_up_at: string | null }>(
+      db,
+      sql`insert into verification_runs (job_id, event_id) values (${job!.id}, ${job!.event_id})
+          returning id, extract_count, agent_id, agent_cleaned_up_at`,
+    );
+    expect(run).toMatchObject({ extract_count: 0, agent_id: null, agent_cleaned_up_at: null });
+    // A resource id never exists without the run id it came with, and cleanup needs a resource.
+    await expect(db.execute(sql`update verification_runs set agent_id = 'agent_x' where id = ${run!.id}`)).rejects.toThrow();
+    await expect(db.execute(sql`update verification_runs set agent_cleaned_up_at = now() where id = ${run!.id}`)).rejects.toThrow();
+    await expect(db.execute(sql`update verification_runs set extract_count = 51 where id = ${run!.id}`)).rejects.toThrow();
   });
 });

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Icon } from "../../../components/ui/Icon";
 import { cn } from "../../../lib/cn";
 import { SOURCE_CLASS_LABEL } from "../../../lib/display";
-import { relativeTime } from "../../../lib/time";
+import { calendarDate, relativeTime } from "../../../lib/time";
 
 const STANCE: Record<EvidenceStance, { label: string; heading: string; icon: IconNode; className: string }> = {
   supports: {
@@ -81,7 +81,9 @@ export function EvidenceItem({ evidence, now, isDemo }: { evidence: Evidence; no
         </p>
         <p className="mt-0.5 text-xs text-muted">
           {evidence.published_at
-            ? `${isCommunity ? "Reported" : "Published"} ${relativeTime(evidence.published_at, now)}`
+            ? evidence.published_at_precision === "day"
+              ? `${isCommunity ? "Reported" : "Published"} ${calendarDate(evidence.published_at, now)} (date only)`
+              : `${isCommunity ? "Reported" : "Published"} ${relativeTime(evidence.published_at, now)}`
             : "Publication time not available"}
           {" · "}
           Retrieved {relativeTime(evidence.retrieved_at, now)}

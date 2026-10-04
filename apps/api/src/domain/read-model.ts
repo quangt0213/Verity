@@ -14,6 +14,7 @@ import {
 import { and, asc, between, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Queryable } from "../db/client";
 import { communitySignals, eventFollows, events, eventTimeline, sourceRecords } from "../db/schema";
+import { storedPublishedPrecision } from "../verification/evidence";
 
 /**
  * Public read model. Everything returned here is public-safe: no user ids,
@@ -206,6 +207,7 @@ export async function getEvidence(db: Queryable, eventId: string): Promise<Evide
     source_domain: r.sourceDomain,
     publisher: r.publisher,
     published_at: iso(r.publishedAt),
+    published_at_precision: storedPublishedPrecision(r),
     retrieved_at: r.retrievedAt.toISOString(),
     quote: r.quote,
     agent_note: r.agentNote,

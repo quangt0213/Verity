@@ -83,6 +83,13 @@ describe("EvidenceSection", () => {
     expect(screen.getByText(/Repeats another source/)).toBeInTheDocument();
   });
 
+  it("shows a date-only publication time as a calendar date, never as a clock-based age", () => {
+    const dateOnly = { ...base, published_at: "2026-10-01T00:00:00.000Z", published_at_precision: "day" as const };
+    renderWithApp(<EvidenceSection event={withEvidence([dateOnly])} now={Date.parse("2026-10-01T15:00:00Z")} />);
+    expect(screen.getByText(/Published Oct 1 \(date only\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Published \d+ h ago/)).toBeNull();
+  });
+
   it("renders hostile quotes as text", () => {
     const { container } = renderWithApp(
       <EvidenceSection event={withEvidence([{ ...base, quote: "<b onmouseover=alert(1)>closed</b>" }])} now={NOW.getTime()} />,

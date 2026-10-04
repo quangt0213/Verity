@@ -44,10 +44,13 @@ async function main() {
 
   // Refuse to touch a database that lacks the Phase 3 schema (e.g. an un-migrated production database).
   const ready = (await database.db.execute(
-    sql`select to_regclass('public.verification_runs') is not null and to_regclass('public.geocode_cache') is not null as ready`,
+    sql`select to_regclass('public.verification_runs') is not null
+          and to_regclass('public.geocode_cache') is not null
+          and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'verification_runs' and column_name = 'extract_count')
+          as ready`,
   )) as unknown as Array<{ ready: boolean }>;
   if (!ready[0]?.ready) {
-    log.error({}, "The database is missing the verification schema (migrations 0003 and 0004). Apply migrations first.");
+    log.error({}, "The database is missing the verification schema (migrations 0003 to 0005). Apply migrations first.");
     await database.close();
     process.exit(1);
   }

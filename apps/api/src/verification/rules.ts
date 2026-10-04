@@ -4,7 +4,8 @@ import type { EvidenceRecord } from "./evidence";
 import { explainDecision } from "./explain";
 import {
   DEFAULT_POLICY,
-  evidenceTime,
+  evidenceBounds,
+  hasDayPrecision,
   freshness,
   scheduledOverAt,
   timeMatch,
@@ -88,7 +89,10 @@ export interface LineageFacts {
   exactLocation: boolean;
   /** At least one qualifying record is fresh (not merely aging). */
   fresh: boolean;
+  /** Latest POSSIBLE time of its newest qualifying record (epoch ms). */
   newestAt: number;
+  /** Earliest possible time of its newest qualifying record: when it is certainly at least this new. */
+  newestCertainAt: number;
   /** A representative name, for explanations. */
   name: string;
 }
@@ -106,6 +110,8 @@ export interface DecisionFacts {
   supportAgedOut: boolean;
   /** Supporting records that would qualify but for an unclear location. */
   locationUnclear: number;
+  /** Located, stance-taking records that don't count only because their time is known to the day, not the hour. */
+  dateOnly: number;
   scheduledOver: boolean;
   /** For "N independent sources (M total)": all lineages and all records. */
   totalLineages: number;
@@ -264,11 +270,17 @@ export function judge(record: EvidenceRecord, event: TimedEvent, now: Date, poli
 
 const STANCE_TIEBREAK = { ended: 0, contradicts: 1, supports: 2 } as const;
 
-function lineageFacts(lineageId: string, judged: JudgedEvidence[], verifying: ReadonlySet<string>): LineageFacts | null {
+function lineageFacts(lineageId: string, judged: JudgedEvidence[], verifying: ReadonlySet<string>, policy: VerificationPolicy): LineageFacts | null {
+  // Order by the earliest POSSIBLE time (a date-only record is not assumed late in its day), then the latest.
   const usable = judged
     .filter((j) => j.qualifies)
-    .map((j) => ({ j, at: evidenceTime(j.record)!.getTime() }))
-    .sort((a, b) => b.at - a.at || STANCE_TIEBREAK[a.j.record.stance as keyof typeof STANCE_TIEBREAK] - STANCE_TIEBREAK[b.j.record.stance as keyof typeof STANCE_TIEBREAK]);
+    .map((j) => ({ j, b: evidenceBounds(j.record, policy)! }))
+    .sort(
+      (a, b) =>
+        b.b.earliest - a.b.earliest ||
+        b.b.latest - a.b.latest ||
+        STANCE_TIEBREAK[a.j.record.stance as keyof typeof STANCE_TIEBREAK] - STANCE_TIEBREAK[b.j.record.stance as keyof typeof STANCE_TIEBREAK],
+    );
   const newest = usable[0];
   if (!newest) return null;
   const records = usable.map((u) => u.j.record);
@@ -281,7 +293,8 @@ function lineageFacts(lineageId: string, judged: JudgedEvidence[], verifying: Re
     identifiedSupport: records.some((r) => r.stance === "supports" && r.sourceType !== "community_report" && verifying.has(r.sourceClass)),
     exactLocation: records.some((r) => r.locationMatch === "exact"),
     fresh: usable.some((u) => u.j.freshness === "fresh"),
-    newestAt: newest.at,
+    newestAt: Math.max(...usable.map((u) => u.b.latest)),
+    newestCertainAt: Math.max(...usable.map((u) => u.b.earliest)),
     name: representative.publisher ?? representative.sourceName,
   };
 }
@@ -296,7 +309,7 @@ export function collectFacts(input: DecisionInput): DecisionFacts {
   const external: LineageFacts[] = [];
   let communitySupport = false;
   for (const [lineageId, members] of byLineage) {
-    const facts = lineageFacts(lineageId, members, verifying);
+    const facts = lineageFacts(lineageId, members, verifying, policy);
     if (!facts) continue;
     if (members.every((m) => m.record.sourceType === "community_report")) {
       communitySupport ||= facts.stance === "supports";
@@ -313,11 +326,21 @@ export function collectFacts(input: DecisionInput): DecisionFacts {
     category: input.event.category,
     support,
     contradiction: external.filter((l) => l.stance === "contradicts"),
-    ended: external.filter((l) => l.stance === "ended" && l.newestAt > newestSupport),
+    // "Ended" wins only when it is CERTAINLY newer than every support (imprecise times can't resolve an event).
+    ended: external.filter((l) => l.stance === "ended" && l.newestCertainAt > newestSupport),
     communitySupport,
     supportAgedOut: supportRecords.length > 0 && !supportRecords.some((j) => j.qualifies) && supportRecords.some((j) => j.freshness === "stale"),
     locationUnclear: judged.filter(
       (j) => !j.qualifies && j.record.stance === "supports" && j.record.locationMatch === "unclear" && j.record.sourceType !== "community_report" && (j.freshness === "fresh" || j.freshness === "aging"),
+    ).length,
+    dateOnly: judged.filter(
+      (j) =>
+        !j.qualifies &&
+        j.record.stance !== "context" &&
+        j.record.sourceType !== "community_report" &&
+        (j.record.locationMatch === "exact" || j.record.locationMatch === "near") &&
+        hasDayPrecision(j.record) &&
+        (j.freshness === "unknown" || j.timeMatch === "unclear"),
     ).length,
     scheduledOver: (() => {
       const over = scheduledOverAt(input.event, policy);

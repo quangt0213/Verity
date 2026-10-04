@@ -1,4 +1,5 @@
-import { CATEGORY_KIND, type EventCategory, type EventStatus, type SourceClass } from "@verity/contracts";
+import { CATEGORY_KIND, type EventCategory, type EventStatus, type SourceClass, type TimePrecision } from "@verity/contracts";
+import { timeBounds, toEvidenceTime, type DayZoneSlack, type TimeBounds } from "./dates";
 
 /**
  * THE verification policy: every duration and threshold the verification
@@ -41,6 +42,14 @@ export interface VerificationPolicy {
    * Disruptions only: planned events use announcementLeadDays.
    */
   outdatedLeadMinutes: number;
+  /**
+   * A date-only value (no clock time, unknown zone) covers the whole calendar
+   * day in every timezone: from its start at UTC+aheadHours to its end at
+   * UTC−behindHours. Freshness and time relevance use the worst case.
+   */
+  dayPrecision: DayZoneSlack;
+  /** Two statements of one time (e.g. Search vs page metadata) further apart than this conflict, and neither is used. */
+  timeConflictToleranceMinutes: number;
   /** Rechecks, in minutes, by how settled the event is. */
   recheckMinutes: { unconfirmed: number; unconfirmedAfter2h: number; confirmed: number; contested: number };
   lineage: {
@@ -85,7 +94,7 @@ const h = (hours: number) => hours * 60;
 const d = (days: number) => days * 24 * 60;
 
 export const DEFAULT_POLICY: VerificationPolicy = {
-  version: "heuristics-2026-10-v2",
+  version: "heuristics-2026-10-v3",
   categories: {
     crash: { freshMinutes: h(2), staleMinutes: h(6), maxRecheckAgeHours: 12 },
     road_closure: { freshMinutes: h(6), staleMinutes: h(24), maxRecheckAgeHours: 48 },
@@ -107,6 +116,8 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   },
   planned: { announcementLeadDays: 14, endGraceMinutes: 60, recheckAfterEndHours: 6 },
   outdatedLeadMinutes: h(6),
+  dayPrecision: { aheadHours: 14, behindHours: 12 },
+  timeConflictToleranceMinutes: 60,
   recheckMinutes: { unconfirmed: 15, unconfirmedAfter2h: 60, confirmed: 30, contested: 20 },
   lineage: { nearDuplicateSimilarity: 0.6, nearDuplicateMinTokens: 12 },
   retry: { baseSeconds: 30, factor: 4, maxSeconds: 30 * 60, jitterRatio: 0.2 },
@@ -134,18 +145,49 @@ export interface TimedEvent {
 export interface TimedEvidence {
   /** When the source says the event happened (as reported), if it says. */
   eventTimeAsReported: Date | null;
+  eventTimePrecision: TimePrecision | null;
   publishedAt: Date | null;
+  publishedAtPrecision: TimePrecision | null;
   /** Present for completeness; deliberately ignored for relevance. */
   retrievedAt: Date;
 }
 
-/** "unknown": no event or publication time, so the evidence can never count as fresh. */
+/**
+ * "unknown": no usable time: none at all, or an imprecise one (a date only)
+ * whose possible range straddles the stale boundary. Unknown never counts as
+ * fresh, and never as proof of staleness either.
+ */
 export type Freshness = "fresh" | "aging" | "stale" | "unknown";
+/** "unclear": no time, or an imprecise one that may or may not predate this event. */
 export type TimeMatch = "current" | "recent" | "outdated" | "unclear";
 
 /** The time a piece of evidence speaks for: the reported event time, else publication. Never retrieval. */
-export function evidenceTime(e: TimedEvidence): Date | null {
-  return e.eventTimeAsReported ?? e.publishedAt ?? null;
+export function evidenceTimeOf(e: TimedEvidence) {
+  return toEvidenceTime(e.eventTimeAsReported, e.eventTimePrecision) ?? toEvidenceTime(e.publishedAt, e.publishedAtPrecision);
+}
+
+/** The interval of moments the evidence may speak for, or null when it has no time. */
+export function evidenceBounds(e: TimedEvidence, policy: VerificationPolicy = DEFAULT_POLICY): TimeBounds | null {
+  const t = evidenceTimeOf(e);
+  return t ? timeBounds(t, policy.dayPrecision) : null;
+}
+
+/** True when the time the evidence speaks for is known only to the day. */
+export function hasDayPrecision(e: TimedEvidence): boolean {
+  return evidenceTimeOf(e)?.precision === "day";
+}
+
+/**
+ * Evaluate a monotonic classification at both ends of the interval (worst =
+ * oldest possible moment). Same answer at both ends: that answer. Otherwise
+ * the worst case, unless the worst case is the "negative" verdict (stale,
+ * outdated), which an imprecise time can neither prove nor rule out.
+ */
+function worstCase<T extends string>(b: TimeBounds, at: (ms: number) => T, negative: T, unknown: T): T {
+  const worst = at(b.earliest);
+  const best = at(b.latest);
+  if (worst === best) return worst;
+  return worst === negative ? unknown : worst;
 }
 
 const minutesBetween = (later: Date, earlier: Date) => (later.getTime() - earlier.getTime()) / 60_000;
@@ -165,8 +207,12 @@ export function scheduledOverAt(event: TimedEvent, policy: VerificationPolicy = 
 }
 
 export function freshness(e: TimedEvidence, event: TimedEvent, now: Date, policy: VerificationPolicy = DEFAULT_POLICY): Freshness {
-  const at = evidenceTime(e);
-  if (!at) return "unknown";
+  const b = evidenceBounds(e, policy);
+  if (!b) return "unknown";
+  return worstCase<Freshness>(b, (ms) => freshnessAt(new Date(ms), event, now, policy), "stale", "unknown");
+}
+
+function freshnessAt(at: Date, event: TimedEvent, now: Date, policy: VerificationPolicy): Exclude<Freshness, "unknown"> {
   if (hasSchedule(event)) {
     const over = scheduledOverAt(event, policy);
     if (over && now > over) return "stale";
@@ -183,8 +229,12 @@ export function freshness(e: TimedEvidence, event: TimedEvent, now: Date, policy
 }
 
 export function timeMatch(e: TimedEvidence, event: TimedEvent, now: Date, policy: VerificationPolicy = DEFAULT_POLICY): TimeMatch {
-  const at = evidenceTime(e);
-  if (!at) return "unclear";
+  const b = evidenceBounds(e, policy);
+  if (!b) return "unclear";
+  return worstCase<TimeMatch>(b, (ms) => timeMatchAt(new Date(ms), event, now, policy), "outdated", "unclear");
+}
+
+function timeMatchAt(at: Date, event: TimedEvent, now: Date, policy: VerificationPolicy): Exclude<TimeMatch, "unclear"> {
   if (hasSchedule(event)) {
     const earliest = event.scheduledStartAt.getTime() - policy.planned.announcementLeadDays * 24 * 60 * 60_000;
     return at.getTime() >= earliest ? "current" : "outdated";

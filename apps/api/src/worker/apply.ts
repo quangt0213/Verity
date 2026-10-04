@@ -104,7 +104,9 @@ async function upsertEvidence(tx: Tx, eventId: string, evidence: NormalizedEvide
           sourceName: values.sourceName,
           sourceDomain: values.sourceDomain,
           publisher: values.publisher,
-          publishedAt: sql`coalesce(excluded.published_at, ${sourceRecords.publishedAt})`,
+          // The worker merged this observation with the stored record (merge.ts), so a missing time
+          // already kept the stored one; the time and its precision (in metadata) are written together.
+          publishedAt: values.publishedAt,
           retrievedAt: values.retrievedAt,
           quote: values.quote,
           agentNote: values.agentNote,

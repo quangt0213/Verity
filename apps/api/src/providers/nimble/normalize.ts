@@ -1,5 +1,7 @@
 import type { EventCategory } from "@verity/contracts";
 import { detectAttributions } from "../../verification/attribution";
+import { parseDateValue, type DayZoneSlack, type EvidenceTime } from "../../verification/dates";
+import { DEFAULT_POLICY } from "../../verification/policy";
 import type { NormalizedEvidence } from "../../verification/evidence";
 import type { SearchContext } from "../../verification/geocoding";
 import { classifyOfficial, OFFICIAL_SOURCES, type OfficialSource } from "../../verification/official-sources";
@@ -22,20 +24,18 @@ import type { SearchResultItem } from "./client";
  */
 
 const DATE_FIELDS = ["publish_date", "published_date", "published_at", "date_published", "publication_date"];
-const EARLIEST = Date.UTC(2000, 0, 1);
 
-/** A trustworthy publication time from additional_data, or null. */
-export function parsePublishDate(additional: Record<string, unknown> | null | undefined, now: Date): Date | null {
+/**
+ * A trustworthy publication time from additional_data, with its real
+ * precision, or null. News focus returns date-only values ("2026-10-03"):
+ * those are DAY precision, never midnight UTC. Relative phrases ("2 hours
+ * ago") and bare years are rejected.
+ */
+export function parsePublishDate(additional: Record<string, unknown> | null | undefined, now: Date, slack: DayZoneSlack = DEFAULT_POLICY.dayPrecision): EvidenceTime | null {
   if (!additional) return null;
   for (const field of DATE_FIELDS) {
-    const raw = additional[field];
-    if (typeof raw !== "string" || raw.length > 64) continue;
-    const trimmed = raw.trim();
-    // Full dates only (YYYY-MM-DD, ISO date-times, RFC 2822); never bare years or relative phrases like "2 hours ago".
-    if (!/^\d{4}-\d{2}-\d{2}/.test(trimmed) && !/^[A-Za-z]{3},? \d{1,2} [A-Za-z]{3} \d{4}/.test(trimmed)) continue;
-    const ms = Date.parse(trimmed);
-    if (!Number.isFinite(ms) || ms < EARLIEST || ms > now.getTime() + 60 * 60_000) continue;
-    return new Date(ms);
+    const parsed = parseDateValue(additional[field], now, slack);
+    if (parsed) return parsed;
   }
   return null;
 }
@@ -65,7 +65,7 @@ export function normalizeResult(
   const excerpt = selectExcerpt(text, input.category, input.context);
   const stance = excerpt ? classifyStance(excerpt, input.category) : "context";
   const locationMatch = matchLocation([title ?? "", excerpt ?? ""].join(". "), input.context);
-  const publishedAt = parsePublishDate(item.additional_data ?? null, input.now);
+  const published = parsePublishDate(item.additional_data ?? null, input.now);
 
   const evidence: NormalizedEvidence = {
     id: null,
@@ -78,7 +78,9 @@ export function normalizeResult(
     sourceClass: official?.sourceClass ?? "UNKNOWN",
     title,
     eventTimeAsReported: null,
-    publishedAt,
+    eventTimePrecision: null,
+    publishedAt: published?.at ?? null,
+    publishedAtPrecision: published?.precision ?? null,
     retrievedAt: input.now,
     excerpt,
     note: null,
@@ -88,11 +90,14 @@ export function normalizeResult(
     attributions: detectAttributions([title, excerpt ?? text.slice(0, 4000)].filter(Boolean).join("\n")),
     originRef: null,
     retrievalMethod: "search",
+    retrievalSteps: ["search"],
+    finalUrl: null,
+    extractRef: null,
     classifiedBy: "rules",
     query: input.query.slice(0, 300),
     providerRequestId: input.requestId,
   };
   // "Usable" for cost analysis: a stance, a located mention and a publication time.
-  const usable = stance !== "context" && (locationMatch === "exact" || locationMatch === "near") && publishedAt !== null;
+  const usable = stance !== "context" && (locationMatch === "exact" || locationMatch === "near") && published !== null;
   return { ok: true, evidence, usable };
 }

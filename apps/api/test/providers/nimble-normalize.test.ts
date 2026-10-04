@@ -111,6 +111,7 @@ describe("normalizing a Nimble result into NormalizedEvidence", () => {
       stance: "supports",
       locationMatch: "exact",
       publishedAt: new Date("2026-10-03T10:00:00Z"),
+      publishedAtPrecision: "instant",
       retrievedAt: NOW,
       retrievalMethod: "search",
       classifiedBy: "rules",
@@ -138,8 +139,9 @@ describe("normalizing a Nimble result into NormalizedEvidence", () => {
   });
 
   it("accepts only full, plausible publication dates", () => {
-    expect(parsePublishDate({ publish_date: "2026-10-03" }, NOW)?.toISOString()).toBe("2026-10-03T00:00:00.000Z");
-    expect(parsePublishDate({ published_at: "Sat, 03 Oct 2026 09:00:00 GMT" }, NOW)?.toISOString()).toBe("2026-10-03T09:00:00.000Z");
+    // Date-only (what news focus returns live): DAY precision, the date as a label, never midnight as a moment.
+    expect(parsePublishDate({ publish_date: "2026-10-03" }, NOW)).toEqual({ at: new Date("2026-10-03T00:00:00.000Z"), precision: "day" });
+    expect(parsePublishDate({ published_at: "Sat, 03 Oct 2026 09:00:00 GMT" }, NOW)).toEqual({ at: new Date("2026-10-03T09:00:00.000Z"), precision: "instant" });
     expect(parsePublishDate({ publish_date: "2 hours ago" }, NOW)).toBeNull();
     expect(parsePublishDate({ publish_date: "2026" }, NOW)).toBeNull();
     expect(parsePublishDate({ publish_date: "2027-01-01" }, NOW)).toBeNull(); // future

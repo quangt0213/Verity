@@ -35,9 +35,9 @@ function makeClock(now: Date): Clock {
 
 type EvidenceInput = Omit<
   Evidence,
-  "id" | "event_id" | "publisher" | "agent_note" | "location_match" | "time_match" | "source_domain"
+  "id" | "event_id" | "publisher" | "agent_note" | "location_match" | "time_match" | "source_domain" | "published_at_precision"
 > &
-  Partial<Pick<Evidence, "publisher" | "agent_note" | "location_match" | "time_match">>;
+  Partial<Pick<Evidence, "publisher" | "agent_note" | "location_match" | "time_match" | "published_at_precision">>;
 
 function evidenceFor(eventId: string, items: EvidenceInput[]): Evidence[] {
   return items.map((item, i) => ({
@@ -48,6 +48,7 @@ function evidenceFor(eventId: string, items: EvidenceInput[]): Evidence[] {
     location_match: item.location_match ?? "near",
     time_match: item.time_match ?? "current",
     source_domain: item.source_url ? new URL(item.source_url).hostname : null,
+    published_at_precision: item.published_at_precision ?? (item.published_at ? "instant" : null),
     ...item,
   }));
 }

@@ -5,6 +5,7 @@ import { events, reports, sourceRecords } from "../db/schema";
 import { fromSourceRecord, type NormalizedEvidence } from "../verification/evidence";
 import { buildSearchContext, lookupPlace, type ReverseGeocoder, type SearchContext } from "../verification/geocoding";
 import { assignLineages } from "../verification/lineage";
+import { mergeWithStored } from "../verification/merge";
 import { DEFAULT_POLICY, type VerificationPolicy } from "../verification/policy";
 import { decide, type EscalationReason, type Retrieval } from "../verification/rules";
 import { canonicalizeUrl } from "../verification/url";
@@ -103,6 +104,15 @@ export function sanitizeEvidence(evidence: NormalizedEvidence[]): NormalizedEvid
     out.push({ ...e, id: null, canonicalUrl: canonical.url });
   }
   return out;
+}
+
+/** Merge each observation into the stored record for the same canonical URL (see merge.ts). */
+export function mergeIntoStored(found: NormalizedEvidence[], stored: NormalizedEvidence[], policy: VerificationPolicy): NormalizedEvidence[] {
+  const byUrl = new Map(stored.filter((e) => e.canonicalUrl).map((e) => [e.canonicalUrl!, e]));
+  return found.flatMap((f) => {
+    const merged = mergeWithStored(byUrl.get(f.canonicalUrl!), f, policy);
+    return merged ? [merged] : [];
+  });
 }
 
 function withTimeout(seconds: number): AbortSignal {
@@ -226,9 +236,10 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
       if (result.errorCode) note = result.errorCode;
     }
 
+    // One record per resource: fold this run's observations into the stored records.
+    found = mergeIntoStored(found, snap.stored, policy);
     // Escalate only if ordinary evidence leaves a real question, and only once per run.
-    const byUrl = new Map(snap.stored.filter((e) => e.canonicalUrl).map((e) => [e.canonicalUrl!, e]));
-    const merged = [...snap.stored.filter((e) => !e.canonicalUrl || !found.some((f) => f.canonicalUrl === e.canonicalUrl)), ...found.map((f) => ({ ...f, id: byUrl.get(f.canonicalUrl!)?.id ?? null }))];
+    const merged = [...snap.stored.filter((e) => !e.canonicalUrl || !found.some((f) => f.canonicalUrl === e.canonicalUrl)), ...found];
     const preliminary = decide({
       event: snap.event,
       evidence: assignLineages(merged, policy),
@@ -248,7 +259,7 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
       } else if (agent.status === "skipped") {
         note = agent.code;
       } else {
-        found = sanitizeEvidence([...found, ...agent.evidence]);
+        found = mergeIntoStored(sanitizeEvidence([...found, ...agent.evidence]), snap.stored, policy);
       }
     }
 
