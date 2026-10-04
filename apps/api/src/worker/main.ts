@@ -5,6 +5,7 @@ import { ConfigError } from "../config";
 import { createDatabase } from "../db/client";
 import { loadWorkerConfig } from "./config";
 import { createWorker } from "./loop";
+import { createNimbleInvestigator } from "../providers/nimble/agent";
 import { createNimbleExtractor } from "../providers/nimble/extract";
 import { createNimbleRetriever } from "../providers/nimble/retriever";
 import { createNominatimGeocoder } from "../providers/nominatim";
@@ -64,6 +65,7 @@ async function main() {
   const extractor = config.nimble.apiKey
     ? createNimbleExtractor({ apiKey: config.nimble.apiKey, baseUrl: config.nimble.baseUrl, now })
     : unconfiguredExtractor;
+  const investigator = config.nimble.apiKey ? createNimbleInvestigator({ apiKey: config.nimble.apiKey, baseUrl: config.nimble.baseUrl }) : unconfiguredInvestigator;
   const geocoder = config.geocoder
     ? durableGeocoder(createNominatimGeocoder({ url: config.geocoder.url, userAgent: config.geocoder.userAgent, now }), database.db, { now })
     : null;
@@ -72,7 +74,7 @@ async function main() {
     config,
     retriever,
     extractor,
-    investigator: unconfiguredInvestigator,
+    investigator,
     geocoder,
     now,
     log,
@@ -87,7 +89,7 @@ async function main() {
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-  log.info({ workerId, concurrency: config.concurrency, retriever: retriever.name, geocoder: geocoder?.provider ?? "none" }, "verification worker started");
+  log.info({ workerId, concurrency: config.concurrency, retriever: retriever.name, extractor: extractor.name, investigator: investigator.name, geocoder: geocoder?.provider ?? "none" }, "verification worker started");
   await worker.run(controller.signal);
   await database.close();
   log.info({ workerId }, "verification worker stopped");

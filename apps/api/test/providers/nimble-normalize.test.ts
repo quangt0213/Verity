@@ -47,6 +47,8 @@ describe("query generation", () => {
 
   it("sanitizes user text: no operators, quotes, URLs or boolean words", () => {
     expect(sanitizeQueryText('site:evil.example "Mission St" -closed OR inurl:x https://x.example/y (and) <b>')).toBe("Mission St closed and b");
+    // Contact details typed into a title never reach a provider; street numbers and highway names stay.
+    expect(sanitizeQueryText("Crash on I-80 at 1200 Main St, call me 415-555-0100 or jane.doe@example.com")).toBe("Crash on I-80 at 1200 Main St call me or");
     const hostile = { ...EVENT, title: 'Closed "site:x.example" OR filetype:pdf https://track.example/?u=1' };
     const queries = buildQueries(hostile, context, { maxSearches: 3, maxResults: 10 });
     for (const q of queries) expect(q.query).not.toMatch(/site:|filetype:|"|https?:|\bOR\b/);

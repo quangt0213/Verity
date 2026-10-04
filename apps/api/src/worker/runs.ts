@@ -1,4 +1,4 @@
-import { and, count, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, count, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Database, Tx } from "../db/client";
 import { verificationRuns } from "../db/schema";
 import type { EscalationReason } from "../verification/rules";
@@ -132,10 +132,22 @@ export async function claimAgentSlot(
   return outcome;
 }
 
-/** Save the provider's run id as soon as it is known (not lease-fenced: the id is worth keeping regardless). */
-export async function saveAgentRunId(db: Database, runId: string, agentRunId: string): Promise<void> {
+/**
+ * Save the provider's run id, and the resource it belongs to, as soon as they
+ * are known (not lease-fenced: the ids are worth keeping regardless). Both are
+ * needed to poll the run on a retry and to clean the resource up.
+ */
+export async function saveAgentRun(db: Database, runId: string, ids: { agentRunId: string; agentId: string | null }): Promise<void> {
   await db
     .update(verificationRuns)
-    .set({ agentRunId: agentRunId.slice(0, 128) })
+    .set({ agentRunId: ids.agentRunId.slice(0, 128), agentId: ids.agentId?.slice(0, 128) ?? null })
     .where(and(eq(verificationRuns.id, runId), isNull(verificationRuns.agentRunId)));
+}
+
+/** Record that the investigation's provider resource was removed (or was already gone). */
+export async function markAgentCleanedUp(db: Database, runId: string, now: Date): Promise<void> {
+  await db
+    .update(verificationRuns)
+    .set({ agentCleanedUpAt: now })
+    .where(and(eq(verificationRuns.id, runId), isNull(verificationRuns.agentCleanedUpAt), isNotNull(verificationRuns.agentId)));
 }

@@ -7,15 +7,16 @@ import { buildSearchContext, lookupPlace, type ReverseGeocoder, type SearchConte
 import { assignLineages } from "../verification/lineage";
 import { mergeWithStored } from "../verification/merge";
 import { DEFAULT_POLICY, type VerificationPolicy } from "../verification/policy";
-import { decide, type EscalationReason, type Retrieval } from "../verification/rules";
+import { decide, type Retrieval } from "../verification/rules";
 import { canonicalizeUrl } from "../verification/url";
 import { activeSignals, applyVerification, triggerCounts, type TriggerCounts } from "./apply";
 import type { WorkerConfig } from "./config";
 import { setVerificationState } from "./effects";
-import { heartbeat, lockOwnedJob, type Lease } from "./jobs";
+import { lockOwnedJob, type Lease } from "./jobs";
 import { combine, enrichWithExtracts, type EnrichmentResult } from "./enrich";
 import type { AgentInvestigator, EventForRetrieval, EvidenceExtractor, EvidenceRetriever, RetrievalResult } from "./ports";
-import { claimAgentSlot, ensureRun, reserveSearches, saveAgentRunId, settleSearches, type Run } from "./runs";
+import { agentGate, cleanupAgent, investigate, useAgentResult, type AgentEvidenceUse } from "./escalate";
+import { ensureRun, reserveSearches, settleSearches } from "./runs";
 import { deferForBudget, settleFailure, type SettleOutcome } from "./settle";
 
 /**
@@ -136,57 +137,6 @@ async function search(deps: WorkerDeps, snap: Snapshot, context: SearchContext):
   }
 }
 
-type AgentOutcome =
-  | { status: "completed"; evidence: NormalizedEvidence[] }
-  | { status: "skipped"; code: string }
-  | { status: "poll_timeout" }
-  | { status: "lost_lease" };
-
-/** At most ONE paid investigation per logical run, ever. Retries poll the saved run instead. */
-async function investigate(deps: WorkerDeps, lease: Lease, run: Run, snap: Snapshot, context: SearchContext, reason: EscalationReason): Promise<AgentOutcome> {
-  const policy = deps.policy ?? DEFAULT_POLICY;
-  const { config } = deps;
-  let runId = run.agentRunId;
-
-  if (!runId) {
-    if (run.agentRequestedAt) {
-      // Claimed by an earlier attempt but no id was saved (crash or lost
-      // response after the call). Fail closed: never buy a second one.
-      return { status: "skipped", code: "agent_outcome_unknown" };
-    }
-    const slot = await claimAgentSlot(deps.db, { lease, runId: run.id, reason, config, now: deps.now() });
-    if (slot.status === "lost_lease") return { status: "lost_lease" };
-    if (slot.status !== "claimed") return { status: "skipped", code: slot.status === "already_claimed" ? "agent_outcome_unknown" : `agent_${slot.status}` };
-    const effort = reason === "conflicting_sources" ? config.nimble.agentConflictEffort : config.nimble.agentEffort;
-    let started;
-    try {
-      started = await deps.investigator.start({ event: snap.event, context, reason, effort, signal: withTimeout(policy.external.searchTimeoutSeconds) });
-    } catch {
-      // Unknown whether the provider created a run: the slot stays claimed (fail closed).
-      return { status: "skipped", code: "agent_start_failed" };
-    }
-    if (started.status !== "started") return { status: "skipped", code: `agent_${started.errorCode}` };
-    runId = started.runId;
-    await saveAgentRunId(deps.db, run.id, runId);
-  }
-
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const deadline = deps.now().getTime() + config.nimble.agentPollTimeoutSeconds * 1000;
-  while (deps.now().getTime() < deadline) {
-    if (!(await heartbeat(deps.db, lease, deps.now()))) return { status: "lost_lease" };
-    let poll;
-    try {
-      poll = await deps.investigator.poll(runId, withTimeout(policy.external.searchTimeoutSeconds));
-    } catch {
-      poll = { status: "running" as const };
-    }
-    if (poll.status === "completed") return { status: "completed", evidence: poll.evidence };
-    if (poll.status === "failed") return { status: "skipped", code: "agent_failed" };
-    await sleep(policy.external.agentPollIntervalSeconds * 1000);
-  }
-  return { status: "poll_timeout" };
-}
-
 export async function processJob(deps: WorkerDeps, lease: Lease): Promise<ProcessOutcome> {
   const policy = deps.policy ?? DEFAULT_POLICY;
   const { db, log } = deps;
@@ -252,23 +202,34 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
       note ??= result.note;
     }
 
-    // Escalate only if ordinary evidence leaves a real question, and only once per run.
+    // The Agent is the exceptional last step: only if the deterministic decision still asks for it
+    // and the cheaper options are used up. A saved (already paid) run is always resumed.
     const preliminary = decide({ event: snap.event, evidence: assignLineages(combine(snap.stored, found), policy), community, retrieval, now: deps.now(), policy });
-    const agentAllowed = deps.investigator.configured && deps.config.nimble.dailyAgentBudget > 0 && deps.config.nimble.agentMaxPerEvent > 0;
-    // Cheaper deterministic options come first: while extraction is blocked (outage, budget), the Agent waits.
-    const agentHeldBack = enrichment.stop === "blocked";
-    if (preliminary.escalation && agentAllowed && agentHeldBack) note ??= "agent_held_extract_blocked";
-    if (preliminary.escalation && agentAllowed && !agentHeldBack && context.searchable) {
-      const agent = await investigate(deps, lease, run, snap, context, preliminary.escalation);
+    const agentEnabled = deps.investigator.configured && deps.config.nimble.dailyAgentBudget > 0 && deps.config.nimble.agentMaxPerEvent > 0;
+    const gate = agentGate({ escalation: preliminary.escalation, enrichmentStop: enrichment.stop, searchable: context.searchable, enabled: agentEnabled });
+    if (gate.heldCode) note ??= gate.heldCode;
+    let agentStats: AgentEvidenceUse["stats"] | null = null;
+    if (gate.start || (run.agentRunId !== null && deps.investigator.configured)) {
+      const agent = await investigate(deps, { lease, run, event: snap.event, context, reason: gate.start ? preliminary.escalation : null });
       if (agent.status === "lost_lease") return "lost_lease";
       if (agent.status === "poll_timeout") {
         // The saved run id is polled again on the next attempt (no new purchase).
         if (lease.attempt < lease.maxAttempts) return await fail("transient", "agent_poll_timeout");
         note = "agent_poll_timeout";
       } else if (agent.status === "skipped") {
-        note = agent.code;
+        if (agent.code !== "agent_not_needed") note = agent.code;
+        if (agent.ref && !run.agentCleanedUpAt && (await cleanupAgent(deps, run.id, agent.ref)) === "failed") note ??= "agent_cleanup_failed";
       } else {
-        found = mergeIntoStored(sanitizeEvidence([...found, ...agent.evidence]), snap.stored, policy);
+        const ceiling = Math.min(4, deps.config.nimble.maxExtractsPerJob);
+        const extractsLeft = deps.extractor.configured && enrichment.stop !== "blocked" ? Math.max(0, ceiling - run.extractCount - enrichment.extracts) : 0;
+        const used = await useAgentResult(deps, { lease, run, event: snap.event, context, stored: snap.stored, found, outcome: agent, extractsLeft });
+        if (used === "lost_lease") return "lost_lease";
+        found = used.found;
+        agentStats = used.stats;
+        enrichment = { ...enrichment, extracts: enrichment.extracts + used.extracts };
+        if (used.note) note ??= used.note;
+        // Cleanup never changes the verdict; a failure is retried by the sweep.
+        if (!run.agentCleanedUpAt && (await cleanupAgent(deps, run.id, agent.ref)) === "failed") note ??= "agent_cleanup_failed";
       }
     }
 
@@ -288,6 +249,11 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
         extracts: enrichment.extracts,
         pagesUsed: enrichment.pagesUsed,
         enrichmentStop: enrichment.stop,
+        agentCitations: agentStats?.citations ?? null,
+        agentAccepted: agentStats?.accepted ?? null,
+        agentTimesProposed: agentStats?.proposedTimes ?? null,
+        agentTimesAccepted: agentStats?.acceptedTimes ?? null,
+        agentReextracted: agentStats?.reextracted ?? null,
         results: stats?.results ?? null,
         accepted: stats?.accepted ?? null,
         usable: stats?.usable ?? null,

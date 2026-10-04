@@ -15,6 +15,7 @@
     "test:concurrency": "vitest run test/concurrency",
     "smoke:nimble": "tsx --env-file-if-exists=.env src/scripts/nimble-smoke.ts",
     "smoke:nimble-extract": "tsx --env-file-if-exists=.env src/scripts/nimble-extract-smoke.ts",
+    "smoke:nimble-agent": "tsx --env-file-if-exists=.env src/scripts/nimble-agent-smoke.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env src/scripts/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env src/scripts/seed-dev.ts",

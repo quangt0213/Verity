@@ -244,9 +244,25 @@ unless the URL asks for it.
 - The link is stored on the report only. It isn't shown publicly and isn't
   fetched.
 
-**Phase 3 (planned):** resolve DNS and reject private ranges at fetch time
-(defense against DNS rebinding), and fetch through Nimble rather than from
-Verity's network.
+**Phase 3 (implemented in S5): user-submitted links are still never fetched.**
+Verity reads pages (Nimble Extract) only for URLs a provider returned: Nimble
+Search results and Agent citations. Report links, community records and URLs
+found in report text are excluded.
+
+- Pages are fetched by Nimble, never from Verity's network, so a page can't
+  reach Verity's internal services.
+- The candidate URL is screened (`canonicalizeUrl`, the same public-URL check)
+  before the call, and the final URL and every redirect hop after it. Any
+  unsafe hop rejects the page. A redirect to another site, or to another
+  registry organization on the same domain, is not merged into the record.
+- The request is fixed and minimal: no cookies, custom headers, request body,
+  browser actions, network capture, parsers or callbacks, and nothing about the
+  reporter or the event. Responses are capped (4 MB), parsed with bounded
+  pattern matching only (never executed or rendered), and only the evidence
+  fields leave the provider module (no raw HTML or full page bodies are
+  stored).
+- Each read is counted before the call, under a per-job ceiling (4) and a daily
+  budget.
 
 ## Output, XSS and headers
 
@@ -305,10 +321,17 @@ database failure returns a generic 500 (tested).
 - Community counts are aggregates. No identities, distances or reporter details
   are ever returned publicly (tested).
 - **Nimble requests carry only event wording and place names.** Search
-  queries are built deterministically from the event's category, title and
-  location text (sanitized of search operators), plus derived place names.
-  They never include coordinates, reporter identity, email or account data
-  (tested). The reverse geocoder, when enabled, receives coordinates rounded
+  queries and the Agent prompt are built deterministically from the event's
+  category, title and location text, plus derived place names. The text is
+  sanitized of search operators, and email addresses and phone-like numbers a
+  reporter may have typed are removed. They never include coordinates,
+  reporter identity, email or account data (tested). Page reads send only the
+  page URL.
+- **Agent runs are unnamed and cleaned up.** Each investigation creates its own
+  Nimble agent resource, with no memory shared between events. The worker
+  deactivates it when the run is over, and a periodic sweep retries failed
+  cleanups. One window remains: a crash between Nimble accepting a run and the
+  worker saving its ids leaves that resource orphaned (it is never re-purchased). The reverse geocoder, when enabled, receives coordinates rounded
   to a ~110 m cell, never the exact pin.
 - **Verification (Phase 3, in progress) uses third-party processors.** To find
   evidence, the verification worker sends an event's category, wording and

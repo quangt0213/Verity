@@ -2,6 +2,7 @@ import { DEFAULT_POLICY } from "../verification/policy";
 import { claimJobs } from "./jobs";
 import { processJob, type WorkerDeps } from "./process";
 import { reapExpiredLeases } from "./settle";
+import { sweepAgentResources } from "./escalate";
 import { sweepAging } from "./sweep";
 
 /**
@@ -21,6 +22,9 @@ export function createWorker(deps: WorkerDeps & { workerId: string }) {
       lastSweep = now.getTime();
       const swept = await sweepAging(deps.db, { now, policy });
       if (swept.length > 0) deps.log.info({ swept: swept.length }, "aging sweep applied");
+      // Leftover agent resources whose cleanup failed earlier (free calls, a few per sweep).
+      const cleaned = await sweepAgentResources(deps.db, deps.investigator, deps.now);
+      if (cleaned > 0) deps.log.info({ cleaned }, "agent resources cleaned up");
     }
     const free = deps.config.concurrency - inFlight.size;
     const leases = await claimJobs(deps.db, { workerId: deps.workerId, limit: free, now: deps.now() });

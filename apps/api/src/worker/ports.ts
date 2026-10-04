@@ -82,14 +82,51 @@ export const unconfiguredExtractor: EvidenceExtractor = {
   extract: async () => ({ status: "permanent_error", code: "extractor_not_configured" }),
 };
 
+/** The provider's identifiers for one investigation: the run, and the resource it belongs to (needed to poll and clean up). */
+export interface AgentRunRef {
+  runId: string;
+  /** Null only for runs saved before migration 0005; such runs can't be polled (fail closed). */
+  agentId: string | null;
+}
+
 export type AgentStart =
-  | { status: "started"; runId: string }
+  | { status: "started"; runId: string; agentId: string | null }
   | { status: "unavailable" | "permanent_error"; errorCode: string; retryAfterSeconds: number | null };
+
+/**
+ * What a completed investigation may hand to Verity: CITATIONS ONLY. A
+ * citation is a URL the provider read plus verbatim excerpts from it. The
+ * investigator can't return evidence records, a source class, a stance or a
+ * verdict; agent-evidence.ts derives everything deterministically from the
+ * citations, and the decision engine decides.
+ */
+export interface AgentCitation {
+  url: string;
+  title: string | null;
+  /** Verbatim excerpts from the page, as the provider quoted them. */
+  excerpts: string[];
+  /** The provider's labels, recorded for analysis only: never a source class. */
+  providerCategory: string | null;
+  providerSourceType: string | null;
+}
+
+/**
+ * Model-proposed fields for a cited URL. NOT evidence: a proposal only says
+ * which time to look for, and it becomes a time only if the cited excerpt (or
+ * the page itself, via Extract) explicitly establishes it.
+ */
+export interface AgentProposal {
+  url: string;
+  publishedAt: string | null;
+  eventTime: string | null;
+}
 
 export type AgentPoll =
   | { status: "running" }
-  | { status: "completed"; evidence: NormalizedEvidence[] }
+  | { status: "completed"; citations: AgentCitation[]; proposals: AgentProposal[] }
   | { status: "failed" | "unavailable"; errorCode: string };
+
+export type AgentCleanup = "deleted" | "not_found" | "failed";
 
 export interface AgentInvestigator {
   readonly name: string;
@@ -102,7 +139,9 @@ export interface AgentInvestigator {
     effort: "low" | "medium";
     signal: AbortSignal;
   }): Promise<AgentStart>;
-  poll(runId: string, signal: AbortSignal): Promise<AgentPoll>;
+  poll(ref: AgentRunRef, signal: AbortSignal): Promise<AgentPoll>;
+  /** Remove (deactivate) the resource an investigation created, after it finished. Free; failure never affects the verdict. */
+  cleanup(ref: AgentRunRef, signal: AbortSignal): Promise<AgentCleanup>;
 }
 
 /** Ports for when no provider is configured: honest "unavailable", never fabricated evidence. */
@@ -117,4 +156,5 @@ export const unconfiguredInvestigator: AgentInvestigator = {
   configured: false,
   start: async () => ({ status: "permanent_error", errorCode: "agent_not_configured", retryAfterSeconds: null }),
   poll: async () => ({ status: "failed", errorCode: "agent_not_configured" }),
+  cleanup: async () => "failed",
 };

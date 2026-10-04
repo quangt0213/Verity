@@ -65,11 +65,14 @@ export async function enrichWithExtracts(
 ): Promise<EnrichmentResult | "lost_lease"> {
   const policy = deps.policy ?? DEFAULT_POLICY;
   const { config } = deps;
-  const max = Math.min(4, config.nimble.maxExtractsPerJob);
+  const ceiling = Math.min(4, config.nimble.maxExtractsPerJob);
   let found = input.found;
-  if (!deps.extractor.configured || max === 0 || config.nimble.dailyExtractBudget === 0) {
+  if (!deps.extractor.configured || ceiling === 0 || config.nimble.dailyExtractBudget === 0) {
     return { found, extracts: 0, pagesUsed: 0, stop: "disabled", note: null };
   }
+  // The ceiling is per JOB: earlier attempts of this run already used some of it.
+  const max = Math.max(0, ceiling - input.run.extractCount);
+  if (max === 0) return { found, extracts: 0, pagesUsed: 0, stop: "ceiling", note: null };
 
   const settled = () =>
     decide({ event: input.event, evidence: assignLineages(combine(input.stored, found), policy), community: input.community, retrieval: input.retrieval, now: deps.now(), policy }).escalation === null;

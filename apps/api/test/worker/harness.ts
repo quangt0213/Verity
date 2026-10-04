@@ -3,7 +3,7 @@ import { events, verificationJobs, verificationRuns } from "../../src/db/schema"
 import type { NormalizedEvidence } from "../../src/verification/evidence";
 import { loadWorkerConfig, type WorkerConfig } from "../../src/worker/config";
 import { claimJobs, type Lease } from "../../src/worker/jobs";
-import { unconfiguredExtractor, type AgentInvestigator, type AgentPoll, type AgentStart, type EvidenceRetriever, type RetrievalResult } from "../../src/worker/ports";
+import { unconfiguredExtractor, type AgentCleanup, type AgentInvestigator, type AgentPoll, type AgentRunRef, type AgentStart, type EvidenceExtractor, type EvidenceRetriever, type ExtractOutcome, type RetrievalResult } from "../../src/worker/ports";
 import type { WorkerDeps, WorkerLog } from "../../src/worker/process";
 import type { TestContext } from "../helpers";
 
@@ -53,24 +53,69 @@ export const results = {
 export function fakeInvestigator(options: {
   start?: () => AgentStart | Promise<AgentStart>;
   poll?: (call: number) => AgentPoll | Promise<AgentPoll>;
-} = {}): AgentInvestigator & { starts: number; polls: number; efforts: string[] } {
+  cleanup?: () => AgentCleanup | Promise<AgentCleanup>;
+} = {}): AgentInvestigator & { starts: number; polls: number; cleanups: number; efforts: string[]; refs: AgentRunRef[] } {
   const investigator = {
     name: "fake-agent",
     configured: true,
     starts: 0,
     polls: 0,
+    cleanups: 0,
     efforts: [] as string[],
+    refs: [] as AgentRunRef[],
     start: async (request: { effort: string }) => {
       investigator.starts += 1;
       investigator.efforts.push(request.effort);
-      return options.start ? options.start() : ({ status: "started", runId: `task_run_${investigator.starts}` } as const);
+      return options.start ? options.start() : ({ status: "started", runId: `task_run_${investigator.starts}`, agentId: `agent_${investigator.starts}` } as const);
     },
-    poll: async () => {
+    poll: async (ref: AgentRunRef) => {
       investigator.polls += 1;
-      return options.poll ? options.poll(investigator.polls) : ({ status: "completed", evidence: [] } as const);
+      investigator.refs.push(ref);
+      return options.poll ? options.poll(investigator.polls) : ({ status: "completed", citations: [], proposals: [] } as const);
+    },
+    cleanup: async () => {
+      investigator.cleanups += 1;
+      return options.cleanup ? options.cleanup() : ("deleted" as const);
     },
   };
   return investigator as AgentInvestigator & typeof investigator;
+}
+
+/** A fake page reader: returns the page registered for a URL, else page_failed. Records every URL it was asked for. */
+export function fakeExtractor(pages: Record<string, ExtractOutcome>): EvidenceExtractor & { urls: string[] } {
+  const extractor = {
+    name: "fake-extract",
+    configured: true,
+    urls: [] as string[],
+    extract: async ({ url }: { url: string }): Promise<ExtractOutcome> => {
+      extractor.urls.push(url);
+      return pages[url] ?? { status: "page_failed", code: "extract_failed" };
+    },
+  };
+  return extractor;
+}
+
+/** A successfully read page with the given main text and (page-metadata) publication time. */
+export function pageRead(url: string, text: string, published: Date | null, precision: "instant" | "day" = "instant"): ExtractOutcome {
+  return { status: "ok", page: { requestedUrl: url, finalUrl: url, title: null, text, published: published ? { at: published, precision } : null, publishedConflict: false, ref: "task_fake" } };
+}
+
+/** A date and time written the way a source writes it ("October 3, 2026, 10:55 a.m. UTC"), for citation excerpts. */
+export function writtenTime(d: Date): string {
+  const month = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][d.getUTCMonth()];
+  const h = d.getUTCHours();
+  const m = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${month} ${d.getUTCDate()}, ${d.getUTCFullYear()}, ${h % 12 || 12}:${m} ${h < 12 ? "a.m." : "p.m."} UTC`;
+}
+
+/** A completed investigation citing one page, with the model's proposed publication time. */
+export function agentFound(cites: Array<{ url: string; excerpt: string; title?: string; published?: Date | string | null; eventTime?: Date | string | null }>): AgentPoll {
+  const iso = (v: Date | string | null | undefined) => (v instanceof Date ? v.toISOString() : (v ?? null));
+  return {
+    status: "completed",
+    citations: cites.map((c) => ({ url: c.url, title: c.title ?? null, excerpts: [c.excerpt], providerCategory: "official", providerSourceType: "primary" })),
+    proposals: cites.map((c) => ({ url: c.url, publishedAt: iso(c.published), eventTime: iso(c.eventTime) })),
+  };
 }
 
 export function deps(ctx: TestContext, clock: FakeClock, over: Partial<WorkerDeps> = {}): WorkerDeps {

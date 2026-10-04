@@ -232,7 +232,9 @@ describe("database constraints", () => {
     // Open outcomes have no completion time; final outcomes must have one.
     await expectViolation(ctx.db.insert(verificationRuns).values({ jobId: other, eventId, outcome: "no_change" }), "verification_runs_completion_consistent");
     await expectViolation(
-      ctx.db.insert(verificationRuns).values({ jobId: other, eventId, outcome: "running", completedAt: new Date() }),
+      // Clearly after started_at (the database's now()), so ONLY the lifecycle rule is violated:
+      // a JS timestamp a millisecond earlier would also trip completed_after_start, which Postgres reports first.
+      ctx.db.insert(verificationRuns).values({ jobId: other, eventId, outcome: "running", completedAt: new Date(Date.now() + 60 * 60_000) }),
       "verification_runs_completion_consistent",
     );
     // An agent run id can only exist after the slot was claimed, and a run holds at most one agent.

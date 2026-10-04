@@ -52,6 +52,9 @@ const MAX_QUERY = 200;
 export function sanitizeQueryText(value: string | null | undefined): string {
   if (!value) return "";
   return normalizeSingleLine(value)
+    // Contact details a reporter may have typed never leave Verity: emails and phone-like digit runs.
+    .replace(/[^\s@]+@[^\s@]+/g, " ")
+    .replace(/\+?\d[\d\s().-]{6,}\d/g, " ")
     .replace(/\b(?:site|inurl|intitle|intext|filetype|cache|related|link|ext):\S*/gi, " ")
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/[^\p{L}\p{N}&#\s-]/gu, " ")

@@ -5,7 +5,7 @@ import { processJob } from "../../src/worker/process";
 import { claimAgentSlot, ensureRun } from "../../src/worker/runs";
 import { reapExpiredLeases } from "../../src/worker/settle";
 import { createTestContext, type TestContext } from "../helpers";
-import { claimFor, deps, eventRow, FakeClock, fakeInvestigator, fakeRetriever, jobsFor, newEvent, newsAt, officialAt, results, runsFor, testConfig } from "./harness";
+import { agentFound, claimFor, deps, eventRow, FakeClock, fakeInvestigator, fakeRetriever, jobsFor, newEvent, newsAt, results, runsFor, testConfig, writtenTime } from "./harness";
 
 let ctx: TestContext;
 let tokens: string[];
@@ -17,6 +17,10 @@ beforeAll(async () => {
 afterAll(async () => ctx.close());
 const reporter = () => tokens[next++ % tokens.length]!;
 
+/** The agent cites an official page whose excerpt states the time explicitly (so the date policy accepts it). */
+const officialCitation = (clock: FakeClock) =>
+  agentFound([{ url: `https://dot.ca.gov/alerts/agent-${clock.now().getTime()}`, excerpt: `As of ${writtenTime(clock.ago(5))}, all lanes of Test St are closed for emergency repairs.`, published: clock.ago(5) }]);
+
 /** One supporting source only: the engine asks for more ("insufficient_independent"). */
 const oneSource = (clock: FakeClock) => fakeRetriever(() => results.found([newsAt(clock, { locationMatch: "near" })]));
 
@@ -25,7 +29,7 @@ describe("bounded agent escalation", () => {
     const clock = new FakeClock();
     const eventId = await newEvent(ctx, reporter());
     const lease = await claimFor(ctx, clock, eventId);
-    const investigator = fakeInvestigator({ poll: () => ({ status: "completed", evidence: [officialAt(clock)] }) });
+    const investigator = fakeInvestigator({ poll: () => (officialCitation(clock)) });
     expect(await processJob(deps(ctx, clock, { retriever: oneSource(clock), investigator }), lease)).toBe("state_changed");
     expect(investigator.starts).toBe(1);
     expect(investigator.efforts).toEqual(["low"]);
@@ -37,7 +41,7 @@ describe("bounded agent escalation", () => {
     const clock = new FakeClock();
     const eventId = await newEvent(ctx, reporter());
     // Attempt 1: the agent is still running when the poll timeout passes.
-    const investigator = fakeInvestigator({ poll: (call) => (call < 100 ? { status: "running" } : { status: "completed", evidence: [] }) });
+    const investigator = fakeInvestigator({ poll: (call) => (call < 100 ? { status: "running" } : { status: "completed", citations: [], proposals: [] }) });
     const lease1 = await claimFor(ctx, clock, eventId);
     expect(await processJob(deps(ctx, clock, { retriever: oneSource(clock), investigator }), lease1)).toBe("retry_scheduled");
     expect((await jobsFor(ctx, eventId))[0]).toMatchObject({ lastError: "agent_poll_timeout" });
@@ -46,7 +50,7 @@ describe("bounded agent escalation", () => {
     // Attempt 2: polls the SAME run and finishes.
     const [job] = await jobsFor(ctx, eventId);
     clock.advance(job!.availableAt.getTime() - clock.now().getTime() + 1000);
-    const done = fakeInvestigator({ poll: () => ({ status: "completed", evidence: [officialAt(clock)] }) });
+    const done = fakeInvestigator({ poll: () => (officialCitation(clock)) });
     const lease2 = await claimFor(ctx, clock, eventId);
     expect(await processJob(deps(ctx, clock, { retriever: oneSource(clock), investigator: done }), lease2)).toBe("state_changed");
     expect(done.starts).toBe(0);
@@ -89,7 +93,7 @@ describe("bounded agent escalation", () => {
     const clock = new FakeClock();
     const eventId = await newEvent(ctx, reporter());
     const config = testConfig({ agentEventCooldownHours: 1, agentMaxPerEvent: 1 });
-    const investigator = fakeInvestigator({ poll: () => ({ status: "completed", evidence: [] }) });
+    const investigator = fakeInvestigator({ poll: () => ({ status: "completed", citations: [], proposals: [] }) });
     const run = async () => processJob(deps(ctx, clock, { config, retriever: oneSource(clock), investigator }), await claimFor(ctx, clock, eventId));
 
     await run();
@@ -111,7 +115,7 @@ describe("bounded agent escalation", () => {
     // Start from an unused budget for today (earlier tests in this file used some).
     await ctx.db.delete(rateLimitCounters).where(eq(rateLimitCounters.key, "budget:agent"));
     const config = testConfig({ dailyAgentBudget: 1 });
-    const investigator = fakeInvestigator({ poll: () => ({ status: "completed", evidence: [] }) });
+    const investigator = fakeInvestigator({ poll: () => ({ status: "completed", citations: [], proposals: [] }) });
     const a = await newEvent(ctx, reporter());
     const b = await newEvent(ctx, reporter());
     await processJob(deps(ctx, clock, { config, retriever: oneSource(clock), investigator }), await claimFor(ctx, clock, a));

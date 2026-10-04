@@ -57,7 +57,8 @@ export function selectExtractCandidates(input: {
       if (e.sourceType === "community_report" || !e.canonicalUrl) return false;
       if (!e.retrievalSteps.includes("search") && !e.retrievalSteps.includes("agent")) return false;
       if (isEnriched(e) || e.locationMatch === "mismatch") return false;
-      const relevant = e.excerpt !== null || e.locationMatch === "exact" || e.locationMatch === "near" || identified;
+      // An Agent-cited page was chosen for THIS investigation, so it is plausibly relevant even without text yet.
+      const relevant = e.excerpt !== null || e.locationMatch === "exact" || e.locationMatch === "near" || identified || e.retrievalSteps.includes("agent");
       return relevant && (needs.time || needs.content || needs.location);
     });
 
