@@ -49,9 +49,16 @@ export const ACTOR_TYPES = ["system", "community", "verifier", "admin"] as const
 export type ActorType = (typeof ACTOR_TYPES)[number];
 
 export const JOB_KINDS = ["VERIFY_EVENT"] as const;
-export const JOB_REASONS = ["NEW_REPORT", "REPORT_ATTACHED", "COMMUNITY_DISPUTE", "MANUAL"] as const;
+export const JOB_REASONS = ["NEW_REPORT", "REPORT_ATTACHED", "COMMUNITY_DISPUTE", "MANUAL", "RECHECK"] as const;
 export type JobReason = (typeof JOB_REASONS)[number];
 export const JOB_STATUSES = ["pending", "running", "succeeded", "failed", "cancelled"] as const;
+/**
+ * Lifecycle of a verification run (one per job). "running", "retry_scheduled"
+ * and "deferred" (waiting for budget) are open; the rest are final.
+ */
+export const RUN_OUTCOMES = ["running", "retry_scheduled", "deferred", "state_changed", "no_change", "failed"] as const;
+export type RunOutcome = (typeof RUN_OUTCOMES)[number];
+export const OPEN_RUN_OUTCOMES = ["running", "retry_scheduled", "deferred"] as const satisfies readonly RunOutcome[];
 export const REPORT_OUTCOMES = ["created", "attached_to_existing"] as const;
 
 // ---------------------------------------------------------------------------
@@ -295,6 +302,11 @@ export const sourceRecords = pgTable(
     reportId: uuid("report_id").references(() => reports.id, { onDelete: "restrict" }),
     sourceType: text("source_type").notNull(),
     sourceName: text("source_name").notNull(),
+    /**
+     * The CANONICAL URL of the source (tracking parameters, fragments and
+     * host aliases removed), so one resource is one record per event. The
+     * originally retrieved URL, when different, goes in extraction_metadata.
+     */
     sourceUrl: text("source_url"),
     sourceDomain: text("source_domain"),
     publisher: text("publisher"),
@@ -333,6 +345,9 @@ export const sourceRecords = pgTable(
     uniqueIndex("source_records_one_independent_per_lineage")
       .on(t.eventId, t.lineageId)
       .where(sql`counts_as_independent`),
+    // Same event + same canonical resource = one record: rechecks update it
+    // instead of adding a copy. Community records carry no URL.
+    uniqueIndex("source_records_one_per_url").on(t.eventId, t.sourceUrl).where(sql`source_url IS NOT NULL`),
     index("source_records_event_idx").on(t.eventId),
   ],
 );
@@ -431,6 +446,126 @@ export const verificationJobs = pgTable(
       .on(t.eventId, t.kind)
       .where(sql`status IN ('pending', 'running')`),
     index("verification_jobs_ready_idx").on(t.status, t.availableAt),
+  ],
+);
+
+/**
+ * Provenance and retry safety for verification: ONE logical run per job,
+ * resumed by every worker attempt (attempts are counted on the job). Holds
+ * identifiers, counts and short codes only: no response bodies, logs,
+ * reporter data, model reasoning or secrets.
+ *
+ * The paid agent investigation is at most one per run: before calling Nimble,
+ * the worker records `agent_requested_at` with a conditional update only the
+ * job's current owner can win. A later attempt that finds it set never starts
+ * another agent; it polls `agent_run_id` if one was saved.
+ */
+export const verificationRuns = pgTable(
+  "verification_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => verificationJobs.id, { onDelete: "restrict" }),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "restrict" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    outcome: text("outcome").notNull().default("running"),
+    /** Ordinary searches across all attempts of this run. */
+    searchCount: integer("search_count").notNull().default(0),
+    /** 0 or 1: set to 1 together with agent_requested_at, before the call. */
+    agentRunCount: integer("agent_run_count").notNull().default(0),
+    agentRequestedAt: timestamp("agent_requested_at", { withTimezone: true }),
+    /** Nimble's run id, saved as soon as Nimble returns it. */
+    agentRunId: text("agent_run_id"),
+    /** Page extractions across all attempts of this run (counted before each call, like searches). */
+    extractCount: integer("extract_count").notNull().default(0),
+    /**
+     * The provider resource the investigation created (Nimble creates a
+     * persistent agent per run), saved with the run id: needed to poll the run
+     * and to clean the resource up afterwards.
+     */
+    agentId: text("agent_id"),
+    /** When that resource was cleaned up (deactivated); null while it still exists or cleanup failed. */
+    agentCleanedUpAt: timestamp("agent_cleaned_up_at", { withTimezone: true }),
+    escalationReason: text("escalation_reason"),
+    decisionRuleId: text("decision_rule_id"),
+    transitionId: uuid("transition_id").references(() => eventStateTransitions.id, { onDelete: "restrict" }),
+    /** The source_records the decision was based on. */
+    evidenceIds: uuid("evidence_ids").array().notNull().default(sql`'{}'::uuid[]`),
+    /** Short machine code of the last failure (e.g. nimble_timeout), never a message or body. */
+    errorCode: text("error_code"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check("verification_runs_outcome_valid", oneOf("outcome", RUN_OUTCOMES)),
+    check(
+      "verification_runs_completion_consistent",
+      sql`(${oneOf("outcome", OPEN_RUN_OUTCOMES)}) = (completed_at IS NULL)`,
+    ),
+    check("verification_runs_completed_after_start", sql`completed_at IS NULL OR completed_at >= started_at`),
+    check("verification_runs_search_count_range", sql`search_count BETWEEN 0 AND 50`),
+    check("verification_runs_agent_count_range", sql`agent_run_count BETWEEN 0 AND 1`),
+    // The agent slot is claimed (count + timestamp) before an id can exist.
+    check("verification_runs_agent_claim_consistent", sql`(agent_run_count = 1) = (agent_requested_at IS NOT NULL)`),
+    check("verification_runs_agent_id_requires_claim", sql`agent_run_id IS NULL OR agent_requested_at IS NOT NULL`),
+    check("verification_runs_agent_id_len", sql`agent_run_id IS NULL OR char_length(agent_run_id) BETWEEN 1 AND 128`),
+    check("verification_runs_extract_count_range", sql`extract_count BETWEEN 0 AND 50`),
+    check("verification_runs_agent_resource_len", sql`agent_id IS NULL OR char_length(agent_id) BETWEEN 1 AND 128`),
+    // The resource id arrives with the run id (never alone); cleanup can only follow a known resource.
+    check("verification_runs_agent_resource_with_run", sql`agent_id IS NULL OR agent_run_id IS NOT NULL`),
+    check("verification_runs_cleanup_requires_resource", sql`agent_cleaned_up_at IS NULL OR agent_id IS NOT NULL`),
+    check("verification_runs_escalation_len", sql`escalation_reason IS NULL OR char_length(escalation_reason) BETWEEN 1 AND 64`),
+    check("verification_runs_rule_len", sql`decision_rule_id IS NULL OR char_length(decision_rule_id) BETWEEN 1 AND 64`),
+    check("verification_runs_error_len", sql`error_code IS NULL OR char_length(error_code) BETWEEN 1 AND 64`),
+    check("verification_runs_evidence_len", sql`cardinality(evidence_ids) <= 200`),
+    uniqueIndex("verification_runs_one_per_job").on(t.jobId),
+    index("verification_runs_event_started_idx").on(t.eventId, t.startedAt),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Reverse-geocode cache: derived place names per ~110 m cell and provider.
+// No user, reporter, event or account data, and no raw provider responses.
+// ---------------------------------------------------------------------------
+
+export const GEOCODE_STATUSES = ["ok", "no_result"] as const;
+
+export const geocodeCache = pgTable(
+  "geocode_cache",
+  {
+    provider: text("provider").notNull(),
+    /** Rounded "lat,lng" cell from geocodeCacheKey(), e.g. "37.760,-122.419". */
+    cellKey: text("cell_key").notNull(),
+    /** "ok" or "no_result". Provider failures are never cached. */
+    status: text("status").notNull(),
+    street: text("street"),
+    neighborhood: text("neighborhood"),
+    city: text("city"),
+    region: text("region"),
+    countryCode: text("country_code"),
+    retrievedAt: timestamp("retrieved_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Lifetimes come from policy.ts (geocodeCache), never hardcoded here. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.provider, t.cellKey] }),
+    check("geocode_cache_status_valid", oneOf("status", GEOCODE_STATUSES)),
+    check(
+      "geocode_cache_no_result_empty",
+      sql`status = 'ok' OR (street IS NULL AND neighborhood IS NULL AND city IS NULL AND region IS NULL AND country_code IS NULL)`,
+    ),
+    check("geocode_cache_cell_key_format", sql`cell_key ~ '^-?[0-9]{1,2}\\.[0-9]{3},-?[0-9]{1,3}\\.[0-9]{3}$'`),
+    check("geocode_cache_country_code_format", sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`),
+    check("geocode_cache_provider_len", sql`char_length(provider) BETWEEN 1 AND 64`),
+    check(
+      "geocode_cache_place_len",
+      sql`(street IS NULL OR char_length(street) <= 120) AND (neighborhood IS NULL OR char_length(neighborhood) <= 120) AND (city IS NULL OR char_length(city) <= 120) AND (region IS NULL OR char_length(region) <= 120)`,
+    ),
+    check("geocode_cache_expiry_after_retrieval", sql`expires_at > retrieved_at`),
+    index("geocode_cache_expires_idx").on(t.expiresAt),
   ],
 );
 

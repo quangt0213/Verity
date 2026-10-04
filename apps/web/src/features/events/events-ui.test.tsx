@@ -75,12 +75,45 @@ describe("EvidenceSection", () => {
     expect(screen.getAllByText(/Demo source/).length).toBeGreaterThan(0);
   });
 
-  it("separates verbatim quotes from Verity's own notes, and flags copies", async () => {
+  it("groups copies of one report under one source, and labels what repeats what", async () => {
     renderWithApp(<EvidenceSection event={highway} now={NOW.getTime()} />);
-    await userEvent.click(screen.getByRole("button", { name: /Show all 4 sources/ }));
-    expect(screen.getByText(/Verity's research note \(not a quote\):/)).toBeInTheDocument();
-    expect(screen.getByText(/Not counted as an independent source/)).toBeInTheDocument();
-    expect(screen.getByText(/Repeats another source/)).toBeInTheDocument();
+    // 4 pages, 3 independent sources: the copy is grouped, not listed as a separate confirmation.
+    expect(screen.getByText(/3 independent sources from 4 pages\. Copies of the same report count once\./)).toBeInTheDocument();
+    expect(screen.getByText(/Also reported by 1 other page using the same underlying report/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show it" }));
+    expect(screen.getByText(/Repeats reporting from/)).toBeInTheDocument();
+    expect(screen.getByText("Official source")).toBeInTheDocument();
+    expect(screen.getAllByText("Primary source").length).toBeGreaterThan(0);
+  });
+
+  it("keeps Verity's own notes apart from verbatim quotes", () => {
+    renderWithApp(<EvidenceSection event={withEvidence([{ ...base, agent_note: "Lane status checked against the incident map." }])} now={NOW.getTime()} />);
+    expect(screen.getByText(/Verity's note \(not a quote\):/)).toBeInTheDocument();
+  });
+
+  it("shows a date-only time as a date and an exact time as an age, and marks out-of-date sources", () => {
+    const now = Date.parse("2026-10-04T15:00:00Z");
+    const dateOnly = { ...base, id: "d1", lineage_id: "l1", published_at: "2026-10-04T00:00:00.000Z", published_at_precision: "day" as const };
+    const exact = { ...base, id: "d2", lineage_id: "l2", published_at: "2026-10-04T14:42:00.000Z", published_at_precision: "instant" as const };
+    const stale = { ...base, id: "d3", lineage_id: "l3", freshness_state: "stale" as const, published_at: "2026-10-01T09:00:00.000Z" };
+    renderWithApp(<EvidenceSection event={withEvidence([dateOnly, exact, stale])} now={now} />);
+    expect(screen.getByText("Published Oct 4 (date only)")).toBeInTheDocument();
+    expect(screen.getByText("Published 18 min ago")).toBeInTheDocument();
+    expect(screen.getByText("Out of date")).toBeInTheDocument();
+    expect(screen.queryByText(/Published \d+ h ago/)).toBeNull();
+  });
+
+  it("shows extended-verification provenance subtly, never as a trust badge", () => {
+    renderWithApp(<EvidenceSection event={withEvidence([{ ...base, found_via: "extended_verification" }])} now={NOW.getTime()} />);
+    expect(screen.getByText("Source discovered during extended verification")).toBeInTheDocument();
+    expect(screen.queryByText(/\bAI\b|\bagent\b/i)).toBeNull();
+  });
+
+  it("shows a date-only publication time as a calendar date, never as a clock-based age", () => {
+    const dateOnly = { ...base, published_at: "2026-10-01T00:00:00.000Z", published_at_precision: "day" as const };
+    renderWithApp(<EvidenceSection event={withEvidence([dateOnly])} now={Date.parse("2026-10-01T15:00:00Z")} />);
+    expect(screen.getByText(/Published Oct 1 \(date only\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Published \d+ h ago/)).toBeNull();
   });
 
   it("renders hostile quotes as text", () => {

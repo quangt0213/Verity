@@ -28,14 +28,16 @@ The app has two parts:
 | --- | --- | --- |
 | 1 | Maypop frontend: map, feed, detail, evidence UI, report UI, themes, mobile, demo adapter | Done |
 | 2 | Verity service: Postgres, passwordless auth, reports, community signals, follows, transitions, outbox | **Done** |
-| 3+ | Nimble investigations, verification engine, RawTree history, notifications | Next |
+| 3 | Evidence verification: worker, Nimble search plus bounded agent escalation, deterministic rules engine, reverification | **In progress** |
+| Later | RawTree history, notifications, standalone web/mobile clients | Planned |
 
 ## Requirements
 
 - Node.js 22 or newer (developed on Node 24), npm 11
 - **No database server needed for development:** the service uses embedded
   Postgres (PGlite). Production uses any Postgres 14+.
-- Optional: the [Maypop CLI](https://github.com/basilica-digital/maypop-cli) to publish the frontend
+- Optional: the [Maypop CLI](https://github.com/basilica-digital/maypop-cli). It is **not** needed to
+  deploy: Maypop builds the frontend from this GitHub repository.
 - Optional: Chrome or Edge for end-to-end tests (or `npx playwright install chromium`)
 
 ## Run locally
@@ -66,7 +68,7 @@ database is single-process, so stop the dev service before seeding or resetting.
 | File | What goes there |
 | --- | --- |
 | `apps/api/.env` (git-ignored; template `apps/api/.env.example`) | **Server-side secrets and settings.** Every value is optional in development. |
-| `apps/web/.env.local` / `.env.production.local` (template `apps/web/.env.example`) | **Public** `VITE_*` values only. The build refuses secret-looking names and scans the bundle for secrets. |
+| `apps/web/.env.local` (template `apps/web/.env.example`) | **Public** `VITE_*` values for local builds only. The build refuses secret-looking names and scans the bundle for secrets. Deployed builds get these values from the build environment (see Deploy). |
 
 ## Test
 
@@ -105,9 +107,18 @@ platform, with any managed Postgres.
 
 ```sh
 npm ci && npm run build -w @verity/api       # → apps/api/dist/{server,migrate}.js
-node apps/api/dist/migrate.js                # apply migrations (or set MIGRATE_ON_START=true)
+VERITY_DATABASE_ACK=<db host> node apps/api/dist/migrate.js   # apply migrations (or MIGRATE_ON_START=true)
 node apps/api/dist/server.js                 # cwd apps/api, so ./drizzle is found
 ```
+
+**Remote-database acknowledgement.** Commands that write schema or process
+jobs refuse a non-local `DATABASE_URL` unless `VERITY_DATABASE_ACK` equals that
+database's host name (copying the host on purpose; a stale `.env` can't do it):
+`migrate` (and `MIGRATE_ON_START=true`) needs the acknowledgement; the API and
+the worker need it **and** `NODE_ENV=production`; demo seeding never touches a
+remote database. A development API (`npm run dev:api`) refuses a remote
+database. Local databases (PGlite, Postgres on a loopback address) need
+nothing. See `apps/api/src/db/target-guard.ts`.
 
 A container build is in `apps/api/Dockerfile` (build from the repo root; not
 yet exercised in CI).
@@ -117,33 +128,100 @@ yet exercised in CI).
 | Variable | Value |
 | --- | --- |
 | `NODE_ENV` | `production` |
-| `DATABASE_URL` | Postgres URL |
+| `DATABASE_URL` | Postgres URL (with `sslmode=require` for hosted Postgres) |
+| `VERITY_DATABASE_ACK` | The host name of `DATABASE_URL` (not a secret): confirms the remote database on purpose |
 | `SESSION_SECRET` | 32+ random characters |
 | `VERITY_PUBLIC_URL` | The service's https URL |
-| `VERITY_ALLOWED_ORIGINS` | The exact Maypop app origin |
+| `VERITY_ALLOWED_ORIGINS` | Exact origins of the Verity clients (today: the Maypop app origin) |
 | `SMTP_URL` and `AUTH_EMAIL_FROM` | For sign-in codes |
 
 Set `TRUST_PROXY` when the service runs behind a load balancer. The service
 refuses to start if production settings are insecure.
 
-### Frontend (Maypop)
+### Verification worker (Phase 3, in progress)
 
-`maypop.toml` builds only `apps/web`. `maypop publish` builds locally, so set
-the public values in `apps/web/.env.production.local`:
+A separate process from the same codebase that processes the
+`verification_jobs` outbox. It is the **only** component that holds
+`NIMBLE_API_KEY`; the API never needs it. It needs only `NODE_ENV`,
+`DATABASE_URL` and `NIMBLE_API_KEY`; everything else has conservative
+defaults (`apps/api/.env.example` lists the budgets and limits). It refuses to
+start in production without a key, or with a Nimble URL other than
+`https://sdk.nimbleway.com`.
 
 ```sh
-VITE_VERITY_DATA_SOURCE=api
-VITE_VERITY_API_URL=https://<your-verity-service>
+npm run build -w @verity/api                 # → apps/api/dist/worker.js alongside server.js
+node apps/api/dist/worker.js                 # cwd apps/api; same image as the API, different command
+npm run dev:worker                           # development: a LOCAL postgres:// DATABASE_URL only
 ```
 
-Then run `maypop auth`, `maypop init` (once, from the repo root), commit, and
-`maypop publish`.
+Production runs need `NODE_ENV=production` and `VERITY_DATABASE_ACK=<db host>`
+(see above).
 
-**After the first publish:**
+**Real-PostgreSQL tests** (worker concurrency, leases, fencing, atomic
+transitions, end-to-end flows with mocked providers): point
+`TEST_DATABASE_URL` at a local, disposable server, never a hosted one. Each
+suite creates, migrates and drops its own database.
+
+```sh
+TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55432/postgres npm run test:concurrency -w @verity/api
+```
+
+- The API never starts verification work. Scale the API and the worker
+  independently; any number of workers can run, because job claiming is safe
+  across processes.
+- The worker needs Postgres. PGlite is single-process and belongs to the API
+  in development.
+- With `NIMBLE_API_KEY` set, the worker searches through **Nimble Search**
+  (standard depth, at most 3 searches per job; see
+  `apps/api/src/providers/nimble/`). Without it, retrieval reports
+  "unavailable" rather than inventing evidence. The agent arrives in a later
+  stage.
+- Official and first-party sources are recognized from a reviewed, public
+  registry (`apps/api/src/verification/official-sources.ts`): change it by
+  pull request.
+- Reverse geocoding (Nominatim) is off unless `GEOCODER_PROVIDER=nominatim`.
+- `NIMBLE_LIVE_SMOKE=1 npm run smoke:nimble -w @verity/api` makes ONE live
+  search request, as an opt-in check. It never runs in `npm test`.
+- Apply migrations (through `0004`) before starting it.
+
+### Frontend (Maypop, built from GitHub)
+
+Maypop is the frontend's host for the challenge, and one Verity client among
+possible future ones (web, PWA, mobile). The deployment path is:
+
+```
+local development → tests → commit → push to GitHub → Maypop imports and builds the repo → apps/web runs on Maypop
+```
+
+- `maypop.toml` declares the build: `npm run build:web`, output `apps/web/dist`.
+  Keep it even though the CLI isn't used, until it is confirmed whether
+  Maypop's GitHub import reads it.
+- The build needs two **public** values, compiled into the bundle (and into
+  its Content-Security-Policy, so they must be present at build time):
+
+  ```sh
+  VITE_VERITY_DATA_SOURCE=api
+  VITE_VERITY_API_URL=https://<your-verity-service>
+  ```
+
+  Set them as build environment variables in Maypop if it offers them; Vite
+  reads `VITE_*` from the build environment. Whether Maypop's GitHub build
+  supports this is **not yet verified**. If it doesn't, the fallback is a
+  committed `apps/web/.env.production` containing only these public values.
+  Without them, the app shows an honest "not connected" state, never demo data.
+- **Never** give a secret to the frontend build. Server secrets
+  (`DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `INTERNAL_API_TOKEN`,
+  `NIMBLE_API_KEY`) belong to the Verity service and worker only.
+
+**After the first Maypop build:**
 
 1. Add the Maypop app's exact origin to `VERITY_ALLOWED_ORIGINS` on the service.
 2. In the published app, test the full flow on real Maypop: browse, sign in,
    report, confirm and follow. See SECURITY.md under remaining risks.
+
+**Optional: Maypop CLI.** `maypop publish` builds locally (reading
+`apps/web/.env.production.local`), pushes Git `HEAD` and uploads the output.
+It still works but is not the challenge deployment path.
 
 ## Repository layout
 

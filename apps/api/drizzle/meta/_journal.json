@@ -22,6 +22,27 @@
       "when": 1791012919362,
       "tag": "0002_lock_down_supabase_data_api",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791061001761,
+      "tag": "0003_verification_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791064022123,
+      "tag": "0004_geocode_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791095104295,
+      "tag": "0005_extract_count_agent_resource",
+      "breakpoints": true
     }
   ]
 }

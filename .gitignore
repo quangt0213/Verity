@@ -31,3 +31,7 @@ apps/web/playwright-report/
 # Verity service local state (embedded dev database, dev email outbox)
 apps/api/.data/
 apps/web/dist-e2e-service/
+
+# Local session handoff context (never committed)
+CLAUDE.md
+HANDOFF.md

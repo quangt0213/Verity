@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { events, eventTimeline, reports, sourceRecords } from "../db/schema";
 import { findDuplicateEvent } from "./dedupe";
+import { PINNED_LOCATION_PLACEHOLDER } from "./labels";
 import { enqueueVerification } from "./outbox";
 import { recordCreation } from "./transitions";
 
@@ -49,7 +50,7 @@ export async function createReport(db: Database, reporterUserId: string, input: 
           category: input.category,
           latitude,
           longitude,
-          approximateLocation: input.location.label ?? "Location pinned on the map",
+          approximateLocation: input.location.label ?? PINNED_LOCATION_PLACEHOLDER,
           status: "UNVERIFIED",
           verificationState: "idle",
           origin: "community_report",

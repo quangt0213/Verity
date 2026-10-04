@@ -32,6 +32,18 @@ export function relativeTime(iso: string, now: number, opts: FormatOptions = {})
   return new Intl.DateTimeFormat(opts.locale, { month: "short", day: "numeric", timeZone: opts.timeZone }).format(then);
 }
 
+/**
+ * A date known only to the day ("Oct 3", or "Oct 3, 2025" in another year).
+ * The value is 00:00 UTC of the stated calendar date, so it is formatted in
+ * UTC: converting it to local time would shift the day and invent a clock time.
+ */
+export function calendarDate(iso: string, now: number, opts: Pick<FormatOptions, "locale"> = {}): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "unknown date";
+  const sameYear = new Date(then).getUTCFullYear() === new Date(now).getUTCFullYear();
+  return new Intl.DateTimeFormat(opts.locale, { month: "short", day: "numeric", year: sameYear ? undefined : "numeric", timeZone: "UTC" }).format(then);
+}
+
 function sameDay(a: number, b: number, timeZone?: string): boolean {
   const fmt = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone });
   return fmt.format(a) === fmt.format(b);

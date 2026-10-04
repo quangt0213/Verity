@@ -7,8 +7,13 @@ justify**.
 
 > **Status:** Phase 1 (the frontend) and Phase 2 (the Verity service: Postgres,
 > authentication, reports, signals, follows, transitions, outbox) are
-> implemented. Sections marked **(planned)** are later phases; their designs and
-> API facts come from the official Nimble and RawTree docs.
+> implemented. Phase 3 (evidence verification with Nimble) is in progress: the
+> worker, lite Search, deterministic Extract enrichment and Agent escalation
+> are implemented and tested, but not yet deployed or run against production.
+> Sections marked
+> **(planned)** are later phases; their designs and API facts come from the
+> official Nimble and RawTree docs, which must be re-checked before
+> implementation (the Nimble agent API has changed since this was written).
 
 ## 1. System overview
 
@@ -66,6 +71,9 @@ apps/api/             The Verity service (Fastify 5, Drizzle ORM, Postgres / PGl
   src/auth/           Better Auth setup, identity resolution, mailers
   src/domain/         read model, reports, dedupe, signals, state machine, transitions, outbox
   src/routes/         public reads · auth · contributions · internal (operator) routes
+  src/verification/   verification core (Phase 3, pure): evidence, URLs, lineage, policy, rules, explanations, geocoding
+  src/worker/         verification worker process (Phase 3): claim/lease, runs, apply, sweep, ports
+  src/providers/      provider adapters behind the ports: nimble/ (Search: client, queries, normalizer, retriever), nominatim.ts (off by default)
   src/security/       CORS + origin guard, rate limiter, error handling
   test/               API tests against an in-memory Postgres
 docs/MAYPOP.md        What Maypop provides, and the identity decision
@@ -114,8 +122,21 @@ scheduled_start_at, scheduled_end_at, expires_at, is_demo
 **Evidence** records separate `quote` (verbatim source text) from `agent_note`
 (Verity's research agent in its own words). The UI labels the latter "not a
 quote". Each record also carries `lineage_id`, `counts_as_independent`,
-`is_primary`, `source_class`, `freshness_state`, `location_match` and
-`time_match`.
+`is_primary`, `source_class`, `freshness_state`, `location_match`,
+`time_match`, `published_at_precision` (`instant` or `day`) and `found_via`
+(`community_report`, `web_search`, `extended_verification`: provider-neutral,
+and never a trust signal). No provider identifiers, model text, page bodies or
+pipeline metadata are exposed.
+
+**Event detail** is four separate parts: the status, "Why Verity says this"
+(the deterministic engine's explanation), "Sources" and "Community input".
+Sources are grouped by underlying report: one entry per independent source,
+with "Also reported by N other pages using the same underlying report" and
+"Repeats reporting from X" for the copies, so many pages never look like many
+confirmations. Labels are plain language ("Official source", "Primary source",
+"Published 18 min ago", "Published Oct 4 (date only)", "Out of date"). Sources
+first found during the Agent investigation say only "Source discovered during
+extended verification".
 
 ### Presentation of trust
 
@@ -261,10 +282,12 @@ Phase 2 produces UNVERIFIED events plus operator transitions through
 | `reports` | Individual claims | FK to event and reporter, ranges, `source_url ~ '^https?://'` |
 | `community_signals` | Answers with history | type↔group consistency, `active = (superseded_at IS NULL)`, one active per (event, user, group) |
 | `event_follows` | Follows | PK (user, event) |
-| `source_records` | Evidence (community now, Nimble later) | enum CHECKs, one independent record per (event, lineage) |
+| `source_records` | Evidence (community now, Nimble later). `source_url` holds the **canonical** URL | enum CHECKs, one independent record per (event, lineage), one record per (event, canonical URL) |
 | `event_timeline` | User-facing history | append-only trigger |
 | `event_state_transitions` | Audit of every status change | append-only, `from ≠ to`, reason required |
-| `verification_jobs` | Outbox for verification work | unique idempotency key, one open job per event, attempt bounds |
+| `verification_jobs` | Outbox for verification work (reasons: new report, attached report, community dispute, manual, `RECHECK`) | unique idempotency key, one open job per event, attempt bounds |
+| `verification_runs` | One logical run per job: provenance (counts, decision rule, transition, evidence ids) and retry safety for the single paid agent investigation | one per job; agent slot claimed before the call; ids, counts and short codes only |
+| `geocode_cache` | Derived place names per provider and ~110 m cell (reverse geocoding for search context) | status ok/no_result only; lifetimes from policy; no user, reporter or event data |
 | `rate_limit_counters` | Fixed-window limits | keys are HMACs (no raw email or IP) |
 
 ### API (`/api/v1`)
@@ -302,7 +325,7 @@ server-side and add validation and rate limits.
 **Why bearer tokens instead of cookies:** see SECURITY.md under the cookie,
 CORS and CSRF analysis.
 
-## 5. Verification engine (planned, Phase 3)
+## 5. Verification engine (Phase 3: pure core implemented; worker pending)
 
 AI acquires and describes evidence. A **deterministic, unit-tested rules
 engine** decides state transitions. The agent's recommendation is an input,
@@ -313,7 +336,7 @@ stateDiagram-v2
   [*] --> UNVERIFIED: community report / discovered source
   UNVERIFIED --> DEVELOPING: independent supporting evidence
   DEVELOPING --> LIKELY: ≥2 independent lineages, fresh
-  LIKELY --> VERIFIED: fresh primary/official evidence or strong independent corroboration, no live contradiction
+  LIKELY --> VERIFIED: fresh primary/official evidence, or independent corroboration including an identified source, no live contradiction
   DEVELOPING --> VERIFIED: fresh official primary source
   VERIFIED --> STALE: evidence ages past category policy
   STALE --> VERIFIED: re-investigation confirms
@@ -324,13 +347,41 @@ stateDiagram-v2
   UNVERIFIED --> REJECTED: credible contradiction, no support
 ```
 
-Rules the engine will enforce, each covered by a test:
+The pure core lives in `apps/api/src/verification/` (no database or network):
+`evidence.ts` (the provider-neutral `NormalizedEvidence` contract and its
+mapping to `source_records`), `url.ts` (conservative canonical URLs,
+publisher identity via the Public Suffix List), `attribution.ts` and
+`lineage.ts` (independence), `policy.ts` (the single, configurable freshness
+and threshold policy, whose values are initial heuristics to calibrate),
+`rules.ts` (the ordered rule table and `decide()`), `explain.ts` (fixed
+explanation templates) and `geocoding.ts` (the reverse-geocoder interface and
+derived search context).
 
-- One anonymous community report cannot produce VERIFIED.
-- Independence counts **lineages**, not URLs. Lineages are grouped by origin
-  domain, near-duplicate excerpt text (shingle similarity) and explicit
-  attribution ("according to …"). Ten syndicated copies of one press release
-  count as one.
+Rules the engine enforces, each covered by a test:
+
+- Community reports alone cannot produce VERIFIED: they form one lineage and
+  never count as external support.
+- **Product rule (S4.1): VERIFIED needs an identified source.** On top of every
+  other requirement, at least one qualifying supporting record must come from
+  an identified source class (`policy.rules.verifiedSourceClasses`, initially
+  `OFFICIAL` and `FIRST_PARTY`; these come only from the reviewed registry or
+  `.gov`, never from text or a provider's label). UNKNOWN web sources are still
+  stored, explained, used for lineage, and count toward DEVELOPING and LIKELY,
+  but any number of them alone stops at LIKELY (escalation
+  `no_identified_source`). The identified record must itself qualify: a stale,
+  off-location, earlier-incident or stance-less official page does not count.
+  There is no numeric credibility score.
+- No results, timeouts and provider outages are not evidence; they change only
+  the explanation.
+- Independence counts **lineages**, not URLs and not publishers. Records are
+  related only by explainable links: the same canonical URL, the same origin
+  metadata, syndication, explicit attribution ("according to …"), or
+  near-duplicate text. **Publisher identity alone never relates two records**:
+  two articles from one newspaper can be independent, while different
+  publishers repeating one wire story are one lineage. Each grouping stores
+  its reason.
+- REJECTED requires a primary official contradiction and no qualifying support,
+  and only applies to unconfirmed events.
 - Recent official primary evidence can establish a claim strongly. A source
   class is one input, not a verdict: official pages can be outdated, and social
   posts can be the earliest primary report.
@@ -349,17 +400,28 @@ From the official v2 docs (`https://docs.nimbleway.com`, OpenAPI at
 
 | Need | Nimble API | How Verity uses it |
 | --- | --- | --- |
-| Straightforward lookup | `POST /v2/search` (`query`, `max_results`, `time_range: hour/day/…`, `include_domains`, `focus: "news"`) | Fast discovery of candidate sources and known official domains. |
-| Multi-step investigation | `POST /v2/agents/runs` (async), then poll `GET /v2/agents/{agent_id}/runs/{run_id}`, then `GET …/result` | A reusable agent via `agent_name` (memory persists), `use_case: "research"`, and an `output_schema` asking for per-source stance, location, published time and missing information. |
-| Known high-value sites | `POST /v2/extract/templates/generations` (`url`, `prompt`, `output_schema`, `name`), then `POST /v2/extract/templates/run` | Structured extraction for transportation, transit and emergency pages. Template names are cached in Postgres and generated by an admin script, never per request. |
-| User-submitted links | `POST /v2/extract` | Fetched **through Nimble**, after Verity's SSRF screen ([SECURITY.md](SECURITY.md)), never by the service directly. |
+| Straightforward lookup | `POST /v2/search` (**implemented in S4**: `search_depth: "standard"`, `plain_text`, `max_results` ≤ 10, `time_range` or `start_date`, `include_domains` for official sources) | Up to 3 deterministic queries per job. Live probes 2026-10-03 (the spec agrees): `content` is empty unless `full_content: true`, whatever the depth; general focus returns no publication date. `focus: "news"` (lite only) returned `additional_data.publish_date` on every result, **date-only** (`YYYY-MM-DD`). Prices: lite $1.10, standard $5.00 per 1K searches; `full_content` adds $1.00 per 1K URLs. The S5 search mode is not yet decided. |
+| Page reading (**implemented in S5**) | `POST /v2/extract` (vx6, no rendering, html plus Readability main-content markdown) | Deterministic enrichment of selected Search results, and of Agent citations whose text doesn't establish a claim. Candidates are chosen deterministically: identified sources first, one page per lineage, at most 4 per job, stopping as soon as the decision is settled. Publication time comes from the page's own metadata, by precedence (JSON-LD `datePublished`, `article:published_time`, …), and conflicting fields withhold it. Search and Extract enrich ONE record. **User-submitted links are never read.** |
+| Multi-step investigation (**implemented in S5**) | `POST /v2/agents/runs` (async, **unnamed**: Nimble creates a minimal agent per run), poll `GET /v2/agents/{agent_id}/runs/{run_id}`, then `GET …/result`; `DELETE /v2/agents/{agent_id}` afterwards | Only after Search, Extract and a deterministic decision that still asks for it, and never while extraction is blocked. `effort: low`, `use_case: "research"`, and an `output_schema` asking for per-source URL and dates. Only citations (URL plus verbatim excerpts) and raw date proposals leave the client. |
+| Known high-value sites | `POST /v2/extract/templates/…` | Not used. Extract with deterministic metadata parsing covers it for now. |
 
-**Grounding.** Agent results include a trust report with per-claim citations,
-**verbatim excerpts**, `source_category` (`official`, `news`, `social`,
-`academic`, `aggregator`, `other`) and `primary`/`secondary`. Verity stores an
-evidence record only if its URL appears among Nimble's citations, and it stores
-the verbatim excerpt as `quote`. Nimble's `confidence` grade is recorded for
-observability but never used as Verity's status.
+**Grounding (S5).** Agent output alone is never authoritative.
+
+- **Evidence comes only from citations.** No citation, no record. A citation
+  without verbatim text creates no record unless its page is read.
+- **Source class and "primary" come only from the registry.** Nimble's
+  `source_category` and `primary` labels are ignored, so the Agent can't
+  promote a site.
+- **Stance and location are classified deterministically** on the excerpt.
+- **Strict date policy.** A model-proposed publication or event time becomes
+  `publishedAt` / `eventTimeAsReported` only when a cited excerpt explicitly
+  states it. An instant needs a date, a time and a zone; a written date alone is
+  day precision. The value is taken from the excerpt, never the model. A clock
+  time without a date establishes nothing. An unsupported proposal may trigger
+  one page read within the extraction ceiling, and the page then supplies only
+  its own metadata or an explicit sentence.
+- Nimble's confidence, reasoning and prose answer are discarded. The
+  deterministic engine decides.
 
 **Bounds.** These limits apply per investigation:
 

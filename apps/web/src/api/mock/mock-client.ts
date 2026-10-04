@@ -280,6 +280,8 @@ export function createMockApi(options: MockApiOptions): VerityApi {
             source_domain: report.source_url ? new URL(report.source_url).hostname : null,
             publisher: null,
             published_at: at,
+            published_at_precision: "instant",
+            found_via: "community_report",
             retrieved_at: at,
             quote: report.description || report.title,
             agent_note: null,

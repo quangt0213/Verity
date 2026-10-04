@@ -20,7 +20,8 @@ cross-origin authentication analysis, and the known remaining risks.
 | Secret | Where it lives |
 | --- | --- |
 | `DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `INTERNAL_API_TOKEN` | `apps/api/.env` / service environment only |
-| `NIMBLE_API_KEY`, `NIMBLE_BASE_URL`, `RAWTREE_API_KEY`, `RAWTREE_DATABASE` | Reserved for Phase 3; service only (accepted but unused now) |
+| `NIMBLE_API_KEY` | The **verification worker's** environment only (Phase 3). The API never reads it. |
+| `RAWTREE_API_KEY`, `RAWTREE_DATABASE` | Reserved for a later phase; accepted but unused |
 
 - Templates hold placeholders only (`apps/api/.env.example`,
   `apps/web/.env.example`). Every other `.env*` file is git-ignored.
@@ -33,6 +34,13 @@ cross-origin authentication analysis, and the known remaining risks.
   2. A post-build scan fails if `dist/` contains server secret names, credential
      shapes or literal secret values from the environment or local env files.
 - The browser never calls Nimble or RawTree.
+- **The verification worker refuses to start in production** without
+  `NIMBLE_API_KEY`, and only ever sends the key to `https://sdk.nimbleway.com`
+  (a local stand-in is allowed outside production). Its configuration
+  serializes with the key and database URL redacted (tested).
+- The repository is public and Maypop builds the frontend from it: nothing
+  secret is ever committed, and only explicitly public `VITE_*` values reach
+  the build.
 
 ## Authentication
 
@@ -215,8 +223,37 @@ superuser nor `BYPASSRLS`. It checks that every normal service operation still
 works and that client roles can't read or write. It also fails if a later
 migration adds a table without RLS.
 
+Every later table gets the same treatment in its own migration: `0003` enables
+RLS on `verification_runs` and revokes the client roles explicitly.
+`test/migrations.test.ts` upgrades a populated `0002` database under
+Supabase-like roles to the current schema and checks that no rows are lost and
+the new table is protected.
+
 Connect with `sslmode=require` in `DATABASE_URL`. postgres.js doesn't use TLS
 unless the URL asks for it.
+
+## Database target guard
+
+A developer's `apps/api/.env` can point at the production database, and
+"remember not to run it" is not a safeguard. `apps/api/src/db/target-guard.ts`
+classifies `DATABASE_URL` as local (PGlite, Postgres on a loopback address) or
+remote, and for a remote database:
+
+- **migrations** (`db:migrate`, `MIGRATE_ON_START=true`) require
+  `VERITY_DATABASE_ACK` to equal the database host;
+- **the verification worker** requires that acknowledgement **and**
+  `NODE_ENV=production`, so a development worker can't process real jobs;
+- **demo seeding** (which also migrates) is refused outright;
+- **the API** in production mode requires the same acknowledgement, and a
+  **development API** (`npm run dev:api`) refuses a remote database. The refusal
+  only points to a local database. A deliberate one-session exception exists
+  for debugging: `VERITY_DEV_REMOTE_DATABASE=<host>` passed on the command line.
+  It is refused when saved in `.env`, never unlocks migrations or the worker,
+  and the server warns for the whole session.
+
+Refusals name the variables, never the URL or credentials (tested). The
+real-PostgreSQL test suites accept only a local `TEST_DATABASE_URL`, refuse
+Supabase hosts and never read `DATABASE_URL`.
 
 ## User-submitted URLs (SSRF)
 
@@ -230,9 +267,25 @@ unless the URL asks for it.
 - The link is stored on the report only. It isn't shown publicly and isn't
   fetched.
 
-**Phase 3 (planned):** resolve DNS and reject private ranges at fetch time
-(defense against DNS rebinding), and fetch through Nimble rather than from
-Verity's network.
+**Phase 3 (implemented in S5): user-submitted links are still never fetched.**
+Verity reads pages (Nimble Extract) only for URLs a provider returned: Nimble
+Search results and Agent citations. Report links, community records and URLs
+found in report text are excluded.
+
+- Pages are fetched by Nimble, never from Verity's network, so a page can't
+  reach Verity's internal services.
+- The candidate URL is screened (`canonicalizeUrl`, the same public-URL check)
+  before the call, and the final URL and every redirect hop after it. Any
+  unsafe hop rejects the page. A redirect to another site, or to another
+  registry organization on the same domain, is not merged into the record.
+- The request is fixed and minimal: no cookies, custom headers, request body,
+  browser actions, network capture, parsers or callbacks, and nothing about the
+  reporter or the event. Responses are capped (4 MB), parsed with bounded
+  pattern matching only (never executed or rendered), and only the evidence
+  fields leave the provider module (no raw HTML or full page bodies are
+  stored).
+- Each read is counted before the call, under a per-job ceiling (4) and a daily
+  budget.
 
 ## Output, XSS and headers
 
@@ -261,6 +314,12 @@ database failure returns a generic 500 (tested).
 
 ## Logging and privacy
 
+- **The verification worker** logs only ids, counts, outcomes and short error
+  codes: never provider messages or bodies, keys, emails or tokens. Its
+  configuration serializes with secrets redacted.
+- **The geocode cache** stores derived place names per provider and ~110 m
+  cell, never an exact pin, and no user, reporter or event identifiers.
+
 - **Structured JSON logs with a request id on every line.** A caller's
   `X-Request-Id` is accepted only if well-formed.
 - **Never logged:**
@@ -284,6 +343,27 @@ database failure returns a generic 500 (tested).
   until there is a privacy-preserving definition.
 - Community counts are aggregates. No identities, distances or reporter details
   are ever returned publicly (tested).
+- **Nimble requests carry only event wording and place names.** Search
+  queries and the Agent prompt are built deterministically from the event's
+  category, title and location text, plus derived place names. The text is
+  sanitized of search operators, and email addresses and phone-like numbers a
+  reporter may have typed are removed. They never include coordinates,
+  reporter identity, email or account data (tested). Page reads send only the
+  page URL.
+- **Agent runs are unnamed and cleaned up.** Each investigation creates its own
+  Nimble agent resource, with no memory shared between events. The worker
+  deactivates it when the run is over, and a periodic sweep retries failed
+  cleanups. One window remains: a crash between Nimble accepting a run and the
+  worker saving its ids leaves that resource orphaned (it is never re-purchased). The reverse geocoder, when enabled, receives coordinates rounded
+  to a ~110 m cell, never the exact pin.
+- **Verification (Phase 3, in progress) uses third-party processors.** To find
+  evidence, the verification worker sends an event's category, wording and
+  location context to Nimble, and may resolve event coordinates to place names
+  through a reverse geocoder. Only the minimum event information needed is
+  sent: never reporter identity, email or account data. Reverse-geocoded place
+  names are derived search metadata about the event, not data about a person.
+  There is no continuous user-location tracking, and event-location
+  verification stays separate from any future user-location feature.
 
 ## Demo data
 
@@ -298,7 +378,7 @@ database failure returns a generic 500 (tested).
 
 1. **Real Maypop not yet tested.** The cross-site iframe design was verified
    locally with Maypop's sandbox flags, but not on real Maypop. After the first
-   publish:
+   GitHub-imported Maypop build:
    - add the exact app origin to `VERITY_ALLOWED_ORIGINS`;
    - confirm Maypop's own response headers don't block calls to the API;
    - run the flow end to end (browse, sign in, report, confirm, follow, reload).

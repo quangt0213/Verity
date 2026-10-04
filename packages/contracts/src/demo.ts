@@ -23,6 +23,8 @@ export const demoEventId = (n: number) => `00000000-0000-4000-8000-${String(n).p
 interface Clock {
   ago(minutes: number): string;
   ahead(minutes: number): string;
+  /** A date-only value `days` before now: 00:00 UTC of that calendar date (use with published_at_precision "day"). */
+  day(days: number): string;
 }
 
 function makeClock(now: Date): Clock {
@@ -30,14 +32,15 @@ function makeClock(now: Date): Clock {
   return {
     ago: (m) => new Date(t - m * MINUTE).toISOString(),
     ahead: (m) => new Date(t + m * MINUTE).toISOString(),
+    day: (d) => new Date(t - d * 24 * 60 * MINUTE).toISOString().slice(0, 10) + "T00:00:00.000Z",
   };
 }
 
 type EvidenceInput = Omit<
   Evidence,
-  "id" | "event_id" | "publisher" | "agent_note" | "location_match" | "time_match" | "source_domain"
+  "id" | "event_id" | "publisher" | "agent_note" | "location_match" | "time_match" | "source_domain" | "published_at_precision" | "found_via"
 > &
-  Partial<Pick<Evidence, "publisher" | "agent_note" | "location_match" | "time_match">>;
+  Partial<Pick<Evidence, "publisher" | "agent_note" | "location_match" | "time_match" | "published_at_precision" | "found_via">>;
 
 function evidenceFor(eventId: string, items: EvidenceInput[]): Evidence[] {
   return items.map((item, i) => ({
@@ -48,6 +51,8 @@ function evidenceFor(eventId: string, items: EvidenceInput[]): Evidence[] {
     location_match: item.location_match ?? "near",
     time_match: item.time_match ?? "current",
     source_domain: item.source_url ? new URL(item.source_url).hostname : null,
+    published_at_precision: item.published_at_precision ?? (item.published_at ? "instant" : null),
+    found_via: item.found_via ?? (item.source_type === "community_report" ? "community_report" : "web_search"),
     ...item,
   }));
 }
@@ -880,7 +885,9 @@ export function buildDemoEvents(now: Date): EventDetail[] {
           source_type: "web_page",
           source_name: "Demo: Arena event calendar",
           source_url: "https://arena.example/events/demo-112",
-          published_at: c.ago(60 * 24 * 30),
+          // A calendar listing states a date, not a time.
+          published_at: c.day(30),
+          published_at_precision: "day",
           retrieved_at: c.ago(55),
           quote: "Doors 7:00 PM. Show 8:00 PM.",
           stance: "supports",

@@ -6,10 +6,16 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=.env src/worker/main.ts",
     "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:concurrency": "vitest run test/concurrency",
+    "smoke:nimble": "tsx --env-file-if-exists=.env src/scripts/nimble-smoke.ts",
+    "smoke:nimble-extract": "tsx --env-file-if-exists=.env src/scripts/nimble-extract-smoke.ts",
+    "smoke:nimble-agent": "tsx --env-file-if-exists=.env src/scripts/nimble-agent-smoke.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env src/scripts/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env src/scripts/seed-dev.ts",
@@ -26,6 +32,7 @@
     "nodemailer": "^10.0.13",
     "pino": "^10.3.1",
     "postgres": "^3.4.9",
+    "tldts": "^7.4.16",
     "zod": "^4.6.5"
   },
   "devDependencies": {

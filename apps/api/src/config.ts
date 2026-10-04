@@ -53,7 +53,8 @@ const envSchema = z.object({
   SMTP_URL: z.string().optional(),
   DEV_OUTBOX_DIR: z.string().optional(),
   INTERNAL_API_TOKEN: z.string().optional(),
-  // Reserved for later phases. Accepted so deployments can pre-provision them, never read now.
+  // Read only by the verification worker (src/worker/config.ts), never by the
+  // API. Accepted here so a shared environment file doesn't fail validation.
   NIMBLE_API_KEY: z.string().optional(),
   NIMBLE_BASE_URL: z.string().optional(),
   RAWTREE_API_KEY: z.string().optional(),
@@ -79,10 +80,31 @@ export interface AppConfig {
 
 export class ConfigError extends Error {}
 
+/** Empty variables (e.g. "PORT=" copied from .env.example) mean "not set". */
+export function presentEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[1].trim() !== ""),
+  );
+}
+
+/** Database URL rules shared by the API and the worker. Problems name the variable, never its value. */
+export function resolveDatabaseUrl(
+  raw: string | undefined,
+  nodeEnv: "development" | "test" | "production",
+  problems: string[],
+): string {
+  const production = nodeEnv === "production";
+  const databaseUrl = raw || (production ? "" : nodeEnv === "test" ? "pglite:memory" : "pglite:.data/pglite");
+  if (!databaseUrl) problems.push("DATABASE_URL is required in production");
+  if (production && databaseUrl.startsWith("pglite:")) problems.push("PGlite is for development only; use Postgres in production");
+  if (databaseUrl && !databaseUrl.startsWith("pglite:") && !/^postgres(ql)?:\/\//.test(databaseUrl)) {
+    problems.push("DATABASE_URL must be a postgres:// URL");
+  }
+  return databaseUrl;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  // Empty variables (e.g. "PORT=" copied from .env.example) mean "not set".
-  const present = Object.fromEntries(Object.entries(env).filter(([, v]) => v !== undefined && v.trim() !== ""));
-  const parsed = envSchema.safeParse(present);
+  const parsed = envSchema.safeParse(presentEnv(env));
   if (!parsed.success) {
     throw new ConfigError(`Invalid environment: ${parsed.error.issues.map((i) => i.path.join(".")).join(", ")}`);
   }
@@ -90,12 +112,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const production = e.NODE_ENV === "production";
   const problems: string[] = [];
 
-  const databaseUrl = e.DATABASE_URL || (production ? "" : e.NODE_ENV === "test" ? "pglite:memory" : "pglite:.data/pglite");
-  if (!databaseUrl) problems.push("DATABASE_URL is required in production");
-  if (production && databaseUrl.startsWith("pglite:")) problems.push("PGlite is for development only; use Postgres in production");
-  if (databaseUrl && !databaseUrl.startsWith("pglite:") && !/^postgres(ql)?:\/\//.test(databaseUrl)) {
-    problems.push("DATABASE_URL must be a postgres:// URL");
-  }
+  const databaseUrl = resolveDatabaseUrl(e.DATABASE_URL, e.NODE_ENV, problems);
 
   const sessionSecret = e.SESSION_SECRET || (production ? "" : DEV_SESSION_SECRET);
   if (production && (sessionSecret.length < 32 || sessionSecret === DEV_SESSION_SECRET)) {
