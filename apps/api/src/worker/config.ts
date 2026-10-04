@@ -32,6 +32,9 @@ const workerEnvSchema = z.object({
   VERIFICATION_LEASE_SECONDS: int(120, 3_600, 600),
   NIMBLE_MAX_SEARCHES_PER_JOB: int(1, 5, 3),
   NIMBLE_DAILY_SEARCH_BUDGET: int(0, 10_000, 200),
+  /** A ceiling, not a target: the worker stops extracting as soon as further pages can't change the outcome. */
+  NIMBLE_MAX_EXTRACTS_PER_JOB: int(0, 4, 4),
+  NIMBLE_DAILY_EXTRACT_BUDGET: int(0, 20_000, 400),
   NIMBLE_DAILY_AGENT_BUDGET: int(0, 500, 20),
   NIMBLE_AGENT_CONFLICT_EFFORT: z.enum(AGENT_EFFORTS).default("low"),
   NIMBLE_AGENT_EVENT_COOLDOWN_HOURS: int(1, 168, 6),
@@ -59,6 +62,10 @@ export interface WorkerConfig {
     maxSearchesPerJob: number;
     /** 0 disables ordinary search. */
     dailySearchBudget: number;
+    /** Page extractions per job (0 disables extraction; at most 4). */
+    maxExtractsPerJob: number;
+    /** 0 disables extraction. */
+    dailyExtractBudget: number;
     /** 0 disables agent investigations. */
     dailyAgentBudget: number;
     agentEffort: "low";
@@ -135,6 +142,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
       baseUrl,
       maxSearchesPerJob: e.NIMBLE_MAX_SEARCHES_PER_JOB,
       dailySearchBudget: e.NIMBLE_DAILY_SEARCH_BUDGET,
+      maxExtractsPerJob: e.NIMBLE_MAX_EXTRACTS_PER_JOB,
+      dailyExtractBudget: e.NIMBLE_DAILY_EXTRACT_BUDGET,
       dailyAgentBudget: e.NIMBLE_DAILY_AGENT_BUDGET,
       agentEffort: "low",
       agentConflictEffort: e.NIMBLE_AGENT_CONFLICT_EFFORT,

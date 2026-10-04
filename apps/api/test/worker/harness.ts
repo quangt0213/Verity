@@ -3,7 +3,7 @@ import { events, verificationJobs, verificationRuns } from "../../src/db/schema"
 import type { NormalizedEvidence } from "../../src/verification/evidence";
 import { loadWorkerConfig, type WorkerConfig } from "../../src/worker/config";
 import { claimJobs, type Lease } from "../../src/worker/jobs";
-import type { AgentInvestigator, AgentPoll, AgentStart, EvidenceRetriever, RetrievalResult } from "../../src/worker/ports";
+import { unconfiguredExtractor, type AgentInvestigator, type AgentPoll, type AgentStart, type EvidenceRetriever, type RetrievalResult } from "../../src/worker/ports";
 import type { WorkerDeps, WorkerLog } from "../../src/worker/process";
 import type { TestContext } from "../helpers";
 
@@ -78,6 +78,7 @@ export function deps(ctx: TestContext, clock: FakeClock, over: Partial<WorkerDep
     db: ctx.db,
     config: testConfig(),
     retriever: fakeRetriever(() => results.none()),
+    extractor: unconfiguredExtractor,
     investigator: fakeInvestigator(),
     geocoder: null,
     now: clock.now,

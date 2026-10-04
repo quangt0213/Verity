@@ -9,7 +9,7 @@ import { rateLimitCounters } from "../db/schema";
  * defers work; it is never evidence about an event.
  */
 
-export type BudgetKind = "search" | "agent";
+export type BudgetKind = "search" | "extract" | "agent";
 
 const DAY_MS = 24 * 60 * 60_000;
 const dayStart = (now: Date) => new Date(Math.floor(now.getTime() / DAY_MS) * DAY_MS);

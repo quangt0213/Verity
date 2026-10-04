@@ -22,6 +22,8 @@ export interface SearchRequest {
   query: string;
   /** Price and description length differ; `content` is empty at either depth without full_content (spec and live probes, 2026-10-03). */
   searchDepth: "standard" | "lite";
+  /** "news" (lite only) returns dated news results (additional_data.publish_date, date-only in live probes). Omitted: general. */
+  focus?: "news";
   maxResults: number;
   country?: string;
   timeRange?: "hour" | "day" | "week" | "month" | "year";
@@ -70,7 +72,7 @@ export function parseRetryAfter(header: string | null, body: unknown, now = Date
   return Number.isFinite(date) ? Math.min(Math.max(0, Math.ceil((date - now) / 1000)), 3600) : null;
 }
 
-async function readCapped(response: Response, maxBytes: number): Promise<string | null> {
+export async function readCapped(response: Response, maxBytes: number): Promise<string | null> {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) return null;
   if (!response.body) return "";
@@ -118,6 +120,7 @@ export function createNimbleSearchClient(options: { apiKey: string; baseUrl: str
         locale: "en",
         country: request.country ?? "US",
       };
+      if (request.focus) body.focus = request.focus;
       if (request.timeRange) body.time_range = request.timeRange;
       else if (request.startDate) body.start_date = request.startDate;
       if (request.includeDomains?.length) body.include_domains = request.includeDomains.slice(0, 50);

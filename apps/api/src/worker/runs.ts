@@ -58,6 +58,26 @@ export async function settleSearches(db: Database, runId: string, reservation: {
   });
 }
 
+export type ExtractReservation = { status: "reserved" } | { status: "budget_exhausted" } | { status: "lost_lease" };
+
+/**
+ * Reserve ONE page extraction: today's budget and the run's extract_count are
+ * taken before the provider is called, so a crash mid-call still shows the
+ * cost. Unlike searches, an extraction is never handed back: a call that may
+ * have reached the provider is counted.
+ */
+export async function reserveExtract(db: Database, lease: Lease, runId: string, config: WorkerConfig, now: Date): Promise<ExtractReservation> {
+  return db.transaction(async (tx) => {
+    if (!(await lockOwnedJob(tx, lease))) return { status: "lost_lease" } as const;
+    if (!(await reserveBudget(tx, "extract", 1, config.nimble.dailyExtractBudget, now))) return { status: "budget_exhausted" } as const;
+    await tx
+      .update(verificationRuns)
+      .set({ extractCount: sql`least(${verificationRuns.extractCount} + 1, 50)` })
+      .where(eq(verificationRuns.id, runId));
+    return { status: "reserved" } as const;
+  });
+}
+
 export type AgentSlot =
   | { status: "claimed" }
   /** Already claimed by an earlier attempt of this run: never buy a second investigation. */

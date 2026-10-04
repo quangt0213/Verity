@@ -40,3 +40,22 @@ export function nimbleResult(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+const EXTRACT_HTML = `<html><head><title>Mission St closed</title>
+<meta property="article:published_time" content="2026-10-03T10:40:00Z">
+<script type="application/ld+json">{"@type":"NewsArticle","datePublished":"2026-10-03T10:40:00Z","dateModified":"2026-10-03T11:55:00Z"}</script>
+</head><body><p>Northbound lanes of Mission St are closed at 22nd St.</p><footer>© 2026</footer></body></html>`;
+
+/** A successful Nimble Extract response for one page (shape per the official ExtractPayload response). */
+export function extractResponse(over: Record<string, unknown> = {}, data: Record<string, unknown> = {}) {
+  return {
+    task_id: "task_abc",
+    url: "https://news.example/mission-closure",
+    status: "success",
+    status_code: 200,
+    data: { html: EXTRACT_HTML, markdown: "# Mission St closed\n\nNorthbound lanes of Mission St are closed at 22nd St.", ...data },
+    metadata: { query_time: "2026-10-03T12:00:00Z", query_duration: 1877, driver: "vx6" },
+    ...over,
+  };
+}
+

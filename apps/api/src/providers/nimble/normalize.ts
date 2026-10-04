@@ -40,7 +40,7 @@ export function parsePublishDate(additional: Record<string, unknown> | null | un
   return null;
 }
 
-export type Normalized = { ok: true; evidence: NormalizedEvidence; usable: boolean } | { ok: false; reason: "invalid_url" | "no_text" };
+export type Normalized = { ok: true; evidence: NormalizedEvidence; usable: boolean; promising: boolean } | { ok: false; reason: "invalid_url" | "no_text" };
 
 export function normalizeResult(
   item: SearchResultItem,
@@ -98,6 +98,9 @@ export function normalizeResult(
     providerRequestId: input.requestId,
   };
   // "Usable" for cost analysis: a stance, a located mention and a publication time.
-  const usable = stance !== "context" && (locationMatch === "exact" || locationMatch === "near") && published !== null;
-  return { ok: true, evidence, usable };
+  const located = locationMatch === "exact" || locationMatch === "near";
+  const usable = stance !== "context" && located && published !== null;
+  // "Promising": relevant enough that reading the page (Extract) may complete it.
+  const promising = stance !== "context" || located;
+  return { ok: true, evidence, usable, promising };
 }

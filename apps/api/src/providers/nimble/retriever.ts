@@ -11,8 +11,10 @@ import { buildQueries } from "./query";
  * never contradicting evidence), de-duplicates by canonical URL, and reports
  * counts for cost analysis.
  *
- * Early stop: q3 (title search) runs only if q1/q2 produced fewer than
- * `enoughUsable` usable items.
+ * Early stop: q3 (the fallback title search) runs only if q1/q2 found too
+ * little: fewer than `enoughUsable` usable items (stance, location and a
+ * time) AND fewer than `enoughPromising` promising ones (a stance or a
+ * location, which page extraction can complete).
  */
 export function createNimbleRetriever(options: {
   apiKey: string;
@@ -22,9 +24,11 @@ export function createNimbleRetriever(options: {
   client?: NimbleSearchClient;
   registry?: readonly OfficialSource[];
   enoughUsable?: number;
+  enoughPromising?: number;
 }): EvidenceRetriever {
   const client = options.client ?? createNimbleSearchClient({ apiKey: options.apiKey, baseUrl: options.baseUrl, fetch: options.fetch });
   const enoughUsable = options.enoughUsable ?? 2;
+  const enoughPromising = options.enoughPromising ?? 3;
 
   return {
     name: "nimble-search",
@@ -37,9 +41,10 @@ export function createNimbleRetriever(options: {
       let succeeded = 0;
       let results = 0;
       let usable = 0;
+      let promising = 0;
 
       for (const spec of queries) {
-        if (spec.id === "q3" && usable >= enoughUsable) break;
+        if (spec.id === "q3" && (usable >= enoughUsable || promising >= enoughPromising)) break;
         if (signal.aborted) {
           failures.push({ kind: "transient", code: "nimble_timeout", retryAfterSeconds: null });
           break;
@@ -59,10 +64,11 @@ export function createNimbleRetriever(options: {
           if (!normalized.ok || evidence.has(normalized.evidence.canonicalUrl!)) continue;
           evidence.set(normalized.evidence.canonicalUrl!, normalized.evidence);
           if (normalized.usable) usable += 1;
+          if (normalized.promising) promising += 1;
         }
       }
 
-      const stats = { queries: queries.length, performed, succeeded, results, accepted: evidence.size, usable };
+      const stats = { queries: queries.length, performed, succeeded, results, accepted: evidence.size, usable, promising };
       const firstFailure = failures[0] ?? null;
       const retryAfterSeconds = failures.reduce<number | null>((max, f) => (f.retryAfterSeconds && f.retryAfterSeconds > (max ?? 0) ? f.retryAfterSeconds : max), null);
 

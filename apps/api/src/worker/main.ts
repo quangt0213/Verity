@@ -5,10 +5,11 @@ import { ConfigError } from "../config";
 import { createDatabase } from "../db/client";
 import { loadWorkerConfig } from "./config";
 import { createWorker } from "./loop";
+import { createNimbleExtractor } from "../providers/nimble/extract";
 import { createNimbleRetriever } from "../providers/nimble/retriever";
 import { createNominatimGeocoder } from "../providers/nominatim";
 import { durableGeocoder } from "./geocode-cache";
-import { unconfiguredInvestigator, unconfiguredRetriever } from "./ports";
+import { unconfiguredExtractor, unconfiguredInvestigator, unconfiguredRetriever } from "./ports";
 
 /**
  * The verification worker process (dist/worker.js), separate from the API
@@ -60,6 +61,9 @@ async function main() {
   const retriever = config.nimble.apiKey
     ? createNimbleRetriever({ apiKey: config.nimble.apiKey, baseUrl: config.nimble.baseUrl, now })
     : unconfiguredRetriever;
+  const extractor = config.nimble.apiKey
+    ? createNimbleExtractor({ apiKey: config.nimble.apiKey, baseUrl: config.nimble.baseUrl, now })
+    : unconfiguredExtractor;
   const geocoder = config.geocoder
     ? durableGeocoder(createNominatimGeocoder({ url: config.geocoder.url, userAgent: config.geocoder.userAgent, now }), database.db, { now })
     : null;
@@ -67,6 +71,7 @@ async function main() {
     db: database.db,
     config,
     retriever,
+    extractor,
     investigator: unconfiguredInvestigator,
     geocoder,
     now,

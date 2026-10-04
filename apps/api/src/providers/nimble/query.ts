@@ -11,9 +11,15 @@ import type { SearchRequest } from "./client";
  * User-entered text is sanitized: search operators and quotes are removed and
  * lengths are capped, so a report can't steer the provider's query syntax.
  *
- *   q1  category words + the strongest location term + city/state
- *   q2  the same, restricted to official domains for that place (if any)
- *   q3  the event's own title + city
+ *   q1  news focus: category words + the strongest location term + city/state
+ *       (the only mode that returns publication dates, per the S4.1 probes)
+ *   q2  general search for the same words, restricted to the official domains
+ *       for that place (official pages are not "news"), if any
+ *   q3  fallback: the event's own title + city, general search; the retriever
+ *       issues it only when q1/q2 found too little
+ *
+ * All use lite depth: standard costs 4.5x as much and returns no page content
+ * without full_content; page text comes from Extract on selected URLs instead.
  */
 
 export interface QuerySpec extends SearchRequest {
@@ -81,11 +87,11 @@ export function buildQueries(
   const what = CATEGORY_WORDS[event.category];
   const where = sanitizeQueryText(context.locationTerms[0] ?? "");
   const area = join(sanitizeQueryText(context.city), sanitizeQueryText(context.region));
-  const base = { searchDepth: "standard" as const, maxResults: options.maxResults, country: context.countryCode ?? "US", ...timeWindow(event, policy) };
+  const base = { searchDepth: "lite" as const, maxResults: options.maxResults, country: context.countryCode ?? "US", ...timeWindow(event, policy) };
 
   const queries: QuerySpec[] = [];
   const q1 = join(what, where, area);
-  if (q1.split(" ").length >= 2) queries.push({ id: "q1", query: q1, ...base });
+  if (q1.split(" ").length >= 2) queries.push({ id: "q1", query: q1, ...base, focus: "news" });
 
   const domains = officialDomainsFor({ region: context.region, city: context.city }, event.category);
   if (domains.length > 0 && (where || area)) queries.push({ id: "q2", query: join(what, where || area), ...base, includeDomains: domains });

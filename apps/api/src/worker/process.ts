@@ -13,7 +13,8 @@ import { activeSignals, applyVerification, triggerCounts, type TriggerCounts } f
 import type { WorkerConfig } from "./config";
 import { setVerificationState } from "./effects";
 import { heartbeat, lockOwnedJob, type Lease } from "./jobs";
-import type { AgentInvestigator, EventForRetrieval, EvidenceRetriever, RetrievalResult } from "./ports";
+import { combine, enrichWithExtracts, type EnrichmentResult } from "./enrich";
+import type { AgentInvestigator, EventForRetrieval, EvidenceExtractor, EvidenceRetriever, RetrievalResult } from "./ports";
 import { claimAgentSlot, ensureRun, reserveSearches, saveAgentRunId, settleSearches, type Run } from "./runs";
 import { deferForBudget, settleFailure, type SettleOutcome } from "./settle";
 
@@ -39,6 +40,7 @@ export interface WorkerDeps {
   config: WorkerConfig;
   policy?: VerificationPolicy;
   retriever: EvidenceRetriever;
+  extractor: EvidenceExtractor;
   investigator: AgentInvestigator;
   /** Already wrapped by the durable cache; null when no geocoding provider is configured. */
   geocoder: ReverseGeocoder | null;
@@ -238,18 +240,25 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
 
     // One record per resource: fold this run's observations into the stored records.
     found = mergeIntoStored(found, snap.stored, policy);
+    const community = await activeSignals(db, lease.eventId);
+
+    // Deterministic enrichment: read selected pages (Extract), stopping as soon as the decision is settled.
+    let enrichment: EnrichmentResult = { found, extracts: 0, pagesUsed: 0, stop: "disabled", note: null };
+    if (retrieval === "ok" && found.length > 0) {
+      const result = await enrichWithExtracts(deps, { lease, run, event: snap.event, context, stored: snap.stored, found, community, retrieval });
+      if (result === "lost_lease") return "lost_lease";
+      enrichment = result;
+      found = result.found;
+      note ??= result.note;
+    }
+
     // Escalate only if ordinary evidence leaves a real question, and only once per run.
-    const merged = [...snap.stored.filter((e) => !e.canonicalUrl || !found.some((f) => f.canonicalUrl === e.canonicalUrl)), ...found];
-    const preliminary = decide({
-      event: snap.event,
-      evidence: assignLineages(merged, policy),
-      community: await activeSignals(db, lease.eventId),
-      retrieval,
-      now: deps.now(),
-      policy,
-    });
+    const preliminary = decide({ event: snap.event, evidence: assignLineages(combine(snap.stored, found), policy), community, retrieval, now: deps.now(), policy });
     const agentAllowed = deps.investigator.configured && deps.config.nimble.dailyAgentBudget > 0 && deps.config.nimble.agentMaxPerEvent > 0;
-    if (preliminary.escalation && agentAllowed && context.searchable) {
+    // Cheaper deterministic options come first: while extraction is blocked (outage, budget), the Agent waits.
+    const agentHeldBack = enrichment.stop === "blocked";
+    if (preliminary.escalation && agentAllowed && agentHeldBack) note ??= "agent_held_extract_blocked";
+    if (preliminary.escalation && agentAllowed && !agentHeldBack && context.searchable) {
       const agent = await investigate(deps, lease, run, snap, context, preliminary.escalation);
       if (agent.status === "lost_lease") return "lost_lease";
       if (agent.status === "poll_timeout") {
@@ -276,6 +285,9 @@ export async function processJob(deps: WorkerDeps, lease: Lease): Promise<Proces
         followUp: applied.followUp,
         note,
         searches: stats?.performed ?? null,
+        extracts: enrichment.extracts,
+        pagesUsed: enrichment.pagesUsed,
+        enrichmentStop: enrichment.stop,
         results: stats?.results ?? null,
         accepted: stats?.accepted ?? null,
         usable: stats?.usable ?? null,

@@ -69,7 +69,7 @@ export interface VerificationPolicy {
   /** The no-cost aging sweep. */
   sweep: { intervalMinutes: number; batchSize: number };
   /** Timeouts for external calls made by the worker. */
-  external: { searchTimeoutSeconds: number; geocodeTimeoutSeconds: number; agentPollIntervalSeconds: number };
+  external: { searchTimeoutSeconds: number; extractTimeoutSeconds: number; geocodeTimeoutSeconds: number; agentPollIntervalSeconds: number };
   rules: {
     /** Independent external lineages that verify an event without a primary official source. */
     verifiedMinIndependent: number;
@@ -125,7 +125,7 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   geocodeCache: { okTtlDays: 90, noResultTtlDays: 7 },
   timeline: { checkedQuietMinutes: h(6), unavailableQuietMinutes: h(3), maxSourceNamesPerEntry: 3 },
   sweep: { intervalMinutes: 5, batchSize: 100 },
-  external: { searchTimeoutSeconds: 30, geocodeTimeoutSeconds: 10, agentPollIntervalSeconds: 5 },
+  external: { searchTimeoutSeconds: 30, extractTimeoutSeconds: 30, geocodeTimeoutSeconds: 10, agentPollIntervalSeconds: 5 },
   rules: { verifiedMinIndependent: 2, likelyMinLineages: 2, resolvedMinIndependent: 2, verifiedSourceClasses: ["OFFICIAL", "FIRST_PARTY"] },
 };
 

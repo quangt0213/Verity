@@ -1,4 +1,5 @@
 import type { EventCategory, EventStatus } from "@verity/contracts";
+import type { ExtractedPage } from "../verification/enrich";
 import type { NormalizedEvidence } from "../verification/evidence";
 import type { SearchContext } from "../verification/geocoding";
 import type { EscalationReason } from "../verification/rules";
@@ -42,7 +43,7 @@ export interface RetrievalResult {
   errorCode: string | null;
   retryAfterSeconds: number | null;
   /** Cost/quality counters for analysis (logged by the worker). */
-  stats?: { queries: number; performed: number; succeeded: number; results: number; accepted: number; usable: number };
+  stats?: { queries: number; performed: number; succeeded: number; results: number; accepted: number; usable: number; promising?: number };
 }
 
 export interface EvidenceRetriever {
@@ -51,6 +52,35 @@ export interface EvidenceRetriever {
   readonly configured: boolean;
   search(request: { event: EventForRetrieval; context: SearchContext; maxSearches: number; signal: AbortSignal }): Promise<RetrievalResult>;
 }
+
+/** One page read by an extractor, reduced to the fields Verity needs (no raw HTML or full body). */
+export type { ExtractedPage };
+
+export type ExtractOutcome =
+  | { status: "ok"; page: ExtractedPage }
+  /** This page can't be used (blocked, failed, unsafe redirect, no content); try another candidate. */
+  | { status: "page_failed"; code: string }
+  /** The provider itself is unavailable (rate limit, 5xx, timeout): stop extracting for now. */
+  | { status: "unavailable"; code: string; retryAfterSeconds: number | null }
+  /** Credentials or account problems: stop extracting. */
+  | { status: "permanent_error"; code: string };
+
+export interface EvidenceExtractor {
+  readonly name: string;
+  readonly configured: boolean;
+  /**
+   * Read ONE page. Each call may cost money. Callers pass only URLs that a
+   * provider (Search, or an Agent citation) returned: never user-submitted
+   * links or report text.
+   */
+  extract(request: { url: string; signal: AbortSignal }): Promise<ExtractOutcome>;
+}
+
+export const unconfiguredExtractor: EvidenceExtractor = {
+  name: "unconfigured",
+  configured: false,
+  extract: async () => ({ status: "permanent_error", code: "extractor_not_configured" }),
+};
 
 export type AgentStart =
   | { status: "started"; runId: string }

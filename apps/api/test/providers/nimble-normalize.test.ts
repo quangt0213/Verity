@@ -32,7 +32,9 @@ describe("query generation", () => {
       ["q2", "road closure Mission St & 22nd St"],
       ["q3", "Road blocked near Mission St San Francisco"],
     ]);
-    expect(a.every((q) => q.searchDepth === "standard" && q.timeRange === "day" && q.country === "US")).toBe(true);
+    // S5: lite everywhere (S4.1 probes); news focus only for q1 (dated reporting), general for official and fallback.
+    expect(a.every((q) => q.searchDepth === "lite" && q.timeRange === "day" && q.country === "US")).toBe(true);
+    expect(a.map((q) => q.focus ?? "general")).toEqual(["news", "general", "general"]);
     expect(a[1]!.includeDomains).toEqual(expect.arrayContaining(["dot.ca.gov", "511.org", "sfmta.com", "sf.gov"]));
     expect(a[1]!.includeDomains).not.toContain("pge.com"); // not authoritative on road closures
   });
