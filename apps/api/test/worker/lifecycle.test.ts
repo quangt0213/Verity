@@ -202,7 +202,8 @@ describe("evidence storage", () => {
     await verify(clock, eventId, () => [newsAt(clock, { publisher: "Local Radio" })]);
     detail = (await ctx.request({ method: "GET", url: `/api/v1/events/${eventId}` })).json();
     expect(detail).toMatchObject({ source_count: 5, independent_source_count: 3 });
-    expect(detail.status).toBe("VERIFIED");
+    // Two independent news lineages plus the community, but no identified (official or first-party) source: LIKELY, never VERIFIED (S4.1 product rule).
+    expect(detail.status).toBe("LIKELY");
   });
 });
 

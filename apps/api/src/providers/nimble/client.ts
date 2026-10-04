@@ -20,7 +20,7 @@ export const MAX_RESULTS = 10;
 
 export interface SearchRequest {
   query: string;
-  /** "standard" returns ~2K chars of content per result; "lite" only title/URL/description. */
+  /** Price and description length differ; `content` is empty at either depth without full_content (spec and live probes, 2026-10-03). */
   searchDepth: "standard" | "lite";
   maxResults: number;
   country?: string;

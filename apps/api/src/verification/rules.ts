@@ -28,7 +28,11 @@ import {
  *    evidence fresh;
  *  - independence counts lineages, never URLs or publishers;
  *  - REJECTED requires a primary official contradiction and no qualifying
- *    support, never mere absence of support.
+ *    support, never mere absence of support;
+ *  - PRODUCT RULE (S4.1): VERIFIED also needs at least one qualifying
+ *    supporting record from an identified source class
+ *    (policy.rules.verifiedSourceClasses: OFFICIAL, FIRST_PARTY). Any number of
+ *    UNKNOWN web sources alone reaches LIKELY at most.
  */
 
 export type Retrieval = "ok" | "no_results" | "unavailable" | "not_attempted";
@@ -60,6 +64,7 @@ export const ESCALATION_REASONS = [
   "location_unclear",
   "contradiction_without_support",
   "community_dispute",
+  "no_identified_source",
 ] as const;
 export type EscalationReason = (typeof ESCALATION_REASONS)[number];
 
@@ -78,6 +83,8 @@ export interface LineageFacts {
   records: EvidenceRecord[];
   /** Contains a primary record from an official or first-party source. */
   primaryOfficial: boolean;
+  /** Contains a qualifying SUPPORTING record from a class that can verify (policy.rules.verifiedSourceClasses). */
+  identifiedSupport: boolean;
   exactLocation: boolean;
   /** At least one qualifying record is fresh (not merely aging). */
   fresh: boolean;
@@ -131,11 +138,13 @@ interface Rule {
   applies: (f: DecisionFacts, status: EventStatus, policy: VerificationPolicy) => boolean;
   /** The lineages the decision rests on. */
   uses: (f: DecisionFacts) => LineageFacts[];
-  escalation?: (f: DecisionFacts) => EscalationReason | null;
+  escalation?: (f: DecisionFacts, policy: VerificationPolicy) => EscalationReason | null;
 }
 
 const ACTIVE = new Set<EventStatus>(ACTIVE_STATUSES);
 const noContradiction = (f: DecisionFacts) => f.contradiction.length === 0;
+/** The VERIFIED source-quality rule: some supporting lineage includes an identified source. */
+const identifiedSupport = (f: DecisionFacts) => f.support.some((l) => l.identifiedSupport);
 
 /**
  * THE rule table, in priority order: the first rule that applies decides.
@@ -184,14 +193,14 @@ export const RULES: readonly Rule[] = [
     id: "verified_primary_source",
     target: "VERIFIED",
     actor: "verifier",
-    applies: (f) => noContradiction(f) && f.support.some((l) => l.primaryOfficial),
+    applies: (f) => noContradiction(f) && f.support.some((l) => l.primaryOfficial) && identifiedSupport(f),
     uses: (f) => f.support,
   },
   {
     id: "verified_independent_sources",
     target: "VERIFIED",
     actor: "verifier",
-    applies: (f, _s, p) => noContradiction(f) && f.support.length >= p.rules.verifiedMinIndependent && f.support.some((l) => l.exactLocation),
+    applies: (f, _s, p) => noContradiction(f) && f.support.length >= p.rules.verifiedMinIndependent && f.support.some((l) => l.exactLocation) && identifiedSupport(f),
     uses: (f) => f.support,
   },
   {
@@ -200,7 +209,8 @@ export const RULES: readonly Rule[] = [
     actor: "verifier",
     applies: (f, _s, p) => noContradiction(f) && f.support.length >= 1 && f.support.length + (f.communitySupport ? 1 : 0) >= p.rules.likelyMinLineages,
     uses: (f) => f.support,
-    escalation: () => "insufficient_independent",
+    // Enough independent sources, but none identified: an investigation may find an official or first-party one.
+    escalation: (f, p) => (f.support.length >= p.rules.verifiedMinIndependent && !identifiedSupport(f) ? "no_identified_source" : "insufficient_independent"),
   },
   {
     id: "developing_single_source",
@@ -254,7 +264,7 @@ export function judge(record: EvidenceRecord, event: TimedEvent, now: Date, poli
 
 const STANCE_TIEBREAK = { ended: 0, contradicts: 1, supports: 2 } as const;
 
-function lineageFacts(lineageId: string, judged: JudgedEvidence[]): LineageFacts | null {
+function lineageFacts(lineageId: string, judged: JudgedEvidence[], verifying: ReadonlySet<string>): LineageFacts | null {
   const usable = judged
     .filter((j) => j.qualifies)
     .map((j) => ({ j, at: evidenceTime(j.record)!.getTime() }))
@@ -268,6 +278,7 @@ function lineageFacts(lineageId: string, judged: JudgedEvidence[]): LineageFacts
     stance: newest.j.record.stance as LineageFacts["stance"],
     records,
     primaryOfficial: records.some((r) => r.isPrimary && (r.sourceClass === "OFFICIAL" || r.sourceClass === "FIRST_PARTY")),
+    identifiedSupport: records.some((r) => r.stance === "supports" && r.sourceType !== "community_report" && verifying.has(r.sourceClass)),
     exactLocation: records.some((r) => r.locationMatch === "exact"),
     fresh: usable.some((u) => u.j.freshness === "fresh"),
     newestAt: newest.at,
@@ -278,13 +289,14 @@ function lineageFacts(lineageId: string, judged: JudgedEvidence[]): LineageFacts
 export function collectFacts(input: DecisionInput): DecisionFacts {
   const policy = input.policy ?? DEFAULT_POLICY;
   const judged = input.evidence.map((r) => judge(r, input.event, input.now, policy));
+  const verifying = new Set<string>(policy.rules.verifiedSourceClasses);
   const byLineage = new Map<string, JudgedEvidence[]>();
   for (const j of judged) byLineage.set(j.record.lineage.lineageId, [...(byLineage.get(j.record.lineage.lineageId) ?? []), j]);
 
   const external: LineageFacts[] = [];
   let communitySupport = false;
   for (const [lineageId, members] of byLineage) {
-    const facts = lineageFacts(lineageId, members);
+    const facts = lineageFacts(lineageId, members, verifying);
     if (!facts) continue;
     if (members.every((m) => m.record.sourceType === "community_report")) {
       communitySupport ||= facts.stance === "supports";
@@ -346,7 +358,7 @@ export function decide(input: DecisionInput): Decision {
   const rule = RULES.find((r) => r.applies(facts, current, policy))!;
   const used = rule.uses(facts);
   const evidenceIds = [...new Set(used.flatMap((l) => l.records.map((r) => r.id)).filter((id): id is string => id !== null))];
-  const escalation = rule.escalation?.(facts) ?? null;
+  const escalation = rule.escalation?.(facts, policy) ?? null;
   const ruleTarget = rule.target === "NO_CHANGE" ? null : rule.target;
 
   let target: EventStatus | null = ruleTarget;

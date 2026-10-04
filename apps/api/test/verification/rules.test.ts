@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { detectAttributions } from "../../src/verification/attribution";
-import { RULE_IDS, RULES, type Decision } from "../../src/verification/rules";
-import { communityReport, hoursAgo, minutesAgo, minutesFromNow, news, official, run } from "./factories";
+import { assignLineages } from "../../src/verification/lineage";
+import { DEFAULT_POLICY } from "../../src/verification/policy";
+import { decide, RULE_IDS, RULES, type Decision } from "../../src/verification/rules";
+import { communityReport, event, hoursAgo, minutesAgo, minutesFromNow, news, NO_SIGNALS, NOW, official, run } from "./factories";
 
 const BANNED = /%|probab|confiden|\bprove|\bproof|certain|guarantee/i;
 
@@ -78,9 +80,14 @@ describe("decide: invariants", () => {
 });
 
 describe("decide: independence counts lineages, not URLs or publishers", () => {
-  it("verifies on two independent, located sources", () => {
-    const d = run("UNVERIFIED", [communityReport(), news(), news({ locationMatch: "near" })]);
+  it("verifies on two independent, located sources when one is an identified source", () => {
+    const d = run("UNVERIFIED", [communityReport(), official({ isPrimary: false }), news({ locationMatch: "near" })]);
     expect(d).toMatchObject({ target: "VERIFIED", ruleId: "verified_independent_sources" });
+  });
+
+  it("stops at LIKELY on two independent news sources: news classes do not satisfy the VERIFIED source rule yet", () => {
+    const d = run("UNVERIFIED", [communityReport(), news(), news({ locationMatch: "near" })]);
+    expect(d).toMatchObject({ target: "LIKELY", ruleId: "likely_multiple_lineages", escalation: "no_identified_source" });
   });
 
   it("does not verify on many URLs of one syndicated story", () => {
@@ -197,5 +204,87 @@ describe("explanations", () => {
     expect(scenarios[1]!.explanation).toMatch(/2 people dispute this; disputes prompt a re-check/);
     const again = run("UNVERIFIED", [communityReport(), news({ excerpt: quote }), news()]);
     expect(again.explanation.replace(/Outlet \w+/g, "")).toBe(scenarios[0]!.explanation.replace(/Outlet \w+/g, ""));
+  });
+});
+
+/**
+ * PRODUCT RULE (S4.1): VERIFIED requires every existing evidence requirement AND
+ * at least one qualifying supporting record from an identified source class
+ * (DEFAULT_POLICY.rules.verifiedSourceClasses: OFFICIAL, FIRST_PARTY).
+ * UNKNOWN web sources still count toward DEVELOPING and LIKELY.
+ */
+describe("decide: VERIFIED needs an identified source (product rule)", () => {
+  const unknown = (over: Parameters<typeof news>[0] = {}) => news({ sourceType: "web_page", sourceClass: "UNKNOWN", ...over });
+  /** A first-party organization that is not primary for road closures (e.g. a utility). */
+  const firstParty = (over: Parameters<typeof news>[0] = {}) =>
+    news({ canonicalUrl: "https://www.pge.com/outages/notice", publisher: "PG&E", sourceName: "PG&E", sourceType: "official_feed", sourceClass: "FIRST_PARTY", isPrimary: false, ...over });
+
+  it("2 independent UNKNOWN supporting sources are not VERIFIED", () => {
+    const d = run("UNVERIFIED", [communityReport(), unknown(), unknown()]);
+    expect(d.facts.support).toHaveLength(2);
+    expect(d).toMatchObject({ target: "LIKELY", ruleId: "likely_multiple_lineages", escalation: "no_identified_source" });
+    expect(d.explanation).toMatch(/needs at least one identified source/);
+    expectHonestExplanation(d);
+  });
+
+  it("many independent UNKNOWN sources, with community support, are still not VERIFIED", () => {
+    const sources = Array.from({ length: 9 }, () => unknown());
+    const d = run("LIKELY", [communityReport(), ...sources], { community: { confirmations: 30, stillHappening: 20 } });
+    expect(d.facts.support).toHaveLength(9);
+    expect(d).toMatchObject({ target: null, guard: "already_in_state", ruleId: "likely_multiple_lineages" });
+  });
+
+  it("an OFFICIAL primary supporting source still VERIFIES under the existing primary rule", () => {
+    const d = run("UNVERIFIED", [communityReport(), official()]);
+    expect(d).toMatchObject({ target: "VERIFIED", ruleId: "verified_primary_source" });
+  });
+
+  it("FIRST_PARTY + an independent UNKNOWN supporting source VERIFIES when freshness, time and location pass", () => {
+    const d = run("UNVERIFIED", [firstParty(), unknown({ locationMatch: "near" })]);
+    expect(d).toMatchObject({ target: "VERIFIED", ruleId: "verified_independent_sources" });
+  });
+
+  it("the identified source must itself qualify: a stale trusted source cannot rescue the rest", () => {
+    const event = { firstSeenAt: hoursAgo(31) };
+    const fresh = () => unknown({ publishedAt: minutesAgo(20) });
+    for (const trusted of [firstParty({ publishedAt: hoursAgo(30) }), official({ publishedAt: hoursAgo(30) })]) {
+      const d = run("UNVERIFIED", [trusted, fresh(), fresh()], { event });
+      expect(d.target, trusted.sourceClass).toBe("LIKELY");
+      expect(d.facts.support.some((l) => l.identifiedSupport)).toBe(false);
+    }
+  });
+
+  it("an irrelevant official source does not qualify (no stance, other location, earlier incident)", () => {
+    const irrelevant = [
+      official({ stance: "context" }),
+      official({ locationMatch: "mismatch" }),
+      official({ locationMatch: "unclear" }),
+      official({ publishedAt: hoursAgo(20) }), // before the event was first seen: an earlier incident
+    ];
+    for (const record of irrelevant) {
+      const d = run("UNVERIFIED", [record, unknown(), unknown()], { event: { category: "crash" } });
+      expect(d.target).toBe("LIKELY");
+      expect(d.ruleId).toBe("likely_multiple_lineages");
+    }
+  });
+
+  it("contradictory official evidence behaves as before: CONFLICTING with support, REJECTED without", () => {
+    const conflicting = run("LIKELY", [unknown(), unknown(), official({ stance: "contradicts" })]);
+    expect(conflicting).toMatchObject({ target: "CONFLICTING", ruleId: "conflicting_sources" });
+    const rejected = run("UNVERIFIED", [communityReport(), official({ stance: "contradicts" })]);
+    expect(rejected).toMatchObject({ target: "REJECTED", ruleId: "rejected_primary_contradiction" });
+  });
+
+  it("UNKNOWN-only support does not reconfirm a VERIFIED event (no fake 'last verified' refresh), and does not downgrade it", () => {
+    const d = run("VERIFIED", [unknown(), unknown()]);
+    expect(d).toMatchObject({ target: null, guard: "no_downgrade", reconfirmed: false });
+    expect(d.explanation).not.toMatch(/needs at least one identified source/);
+  });
+
+  it("is driven by policy: with no verifying classes configured, nothing verifies", () => {
+    const policy = { ...DEFAULT_POLICY, rules: { ...DEFAULT_POLICY.rules, verifiedSourceClasses: [] } };
+    const d = decide({ event: event("UNVERIFIED"), evidence: assignLineages([official(), firstParty(), unknown()]), community: NO_SIGNALS, retrieval: "ok", now: NOW, policy });
+    expect(d.target).toBe("LIKELY");
+    expect(DEFAULT_POLICY.rules.verifiedSourceClasses).toEqual(["OFFICIAL", "FIRST_PARTY"]);
   });
 });

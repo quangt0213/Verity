@@ -1,4 +1,4 @@
-import { CATEGORY_KIND, type EventCategory, type EventStatus } from "@verity/contracts";
+import { CATEGORY_KIND, type EventCategory, type EventStatus, type SourceClass } from "@verity/contracts";
 
 /**
  * THE verification policy: every duration and threshold the verification
@@ -68,14 +68,24 @@ export interface VerificationPolicy {
     likelyMinLineages: number;
     /** Independent "it ended" lineages that resolve an event without a primary official one. */
     resolvedMinIndependent: number;
+    /**
+     * PRODUCT RULE: VERIFIED needs at least one qualifying supporting record from
+     * one of these identified source classes, on top of every other requirement.
+     * UNKNOWN (unidentified web pages), SOCIAL and COMMUNITY never qualify, so any
+     * number of them alone can reach LIKELY at most.
+     */
+    verifiedSourceClasses: readonly VerifyingSourceClass[];
   };
 }
+
+/** Source classes that may ever satisfy the VERIFIED source-quality rule. */
+export type VerifyingSourceClass = Exclude<SourceClass, "UNKNOWN" | "SOCIAL" | "COMMUNITY">;
 
 const h = (hours: number) => hours * 60;
 const d = (days: number) => days * 24 * 60;
 
 export const DEFAULT_POLICY: VerificationPolicy = {
-  version: "heuristics-2026-10-v1",
+  version: "heuristics-2026-10-v2",
   categories: {
     crash: { freshMinutes: h(2), staleMinutes: h(6), maxRecheckAgeHours: 12 },
     road_closure: { freshMinutes: h(6), staleMinutes: h(24), maxRecheckAgeHours: 48 },
@@ -105,7 +115,7 @@ export const DEFAULT_POLICY: VerificationPolicy = {
   timeline: { checkedQuietMinutes: h(6), unavailableQuietMinutes: h(3), maxSourceNamesPerEntry: 3 },
   sweep: { intervalMinutes: 5, batchSize: 100 },
   external: { searchTimeoutSeconds: 30, geocodeTimeoutSeconds: 10, agentPollIntervalSeconds: 5 },
-  rules: { verifiedMinIndependent: 2, likelyMinLineages: 2, resolvedMinIndependent: 2 },
+  rules: { verifiedMinIndependent: 2, likelyMinLineages: 2, resolvedMinIndependent: 2, verifiedSourceClasses: ["OFFICIAL", "FIRST_PARTY"] },
 };
 
 // ---------------------------------------------------------------------------

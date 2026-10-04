@@ -82,6 +82,9 @@ export function explainDecision(d: Omit<Decision, "explanation">, current: Event
   if (d.ruleId === "stale_support_aged_out") {
     parts.push(`For this kind of event, evidence older than ${durationText(policy.categories[f.category].staleMinutes)} no longer counts as current.`);
   }
+  if (d.ruleId === "likely_multiple_lineages" && current !== "VERIFIED" && f.support.length >= policy.rules.verifiedMinIndependent && !f.support.some((l) => l.identifiedSupport)) {
+    parts.push("Verified status also needs at least one identified source, such as an official agency or the organization involved.");
+  }
   if (d.guard === "no_downgrade") parts.push(`Status stays ${STATUS_LABEL[current]} until the evidence changes or ages out.`);
   if (d.guard === "reopened") parts.push("New supporting evidence reopened this event for verification.");
   if (f.community.disputes > 0) parts.push(`${plural(f.community.disputes, "person disputes", "people dispute")} this; disputes prompt a re-check but don't change the status on their own.`);
