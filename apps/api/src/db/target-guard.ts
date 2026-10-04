@@ -11,12 +11,27 @@
  *   - The worker additionally needs NODE_ENV=production to touch a remote
  *     database (it would otherwise process real jobs from a dev machine).
  *   - Demo seeding never touches a remote database.
+ *   - The API in PRODUCTION mode needs the same VERITY_DATABASE_ACK.
+ *   - The API in DEVELOPMENT mode refuses a remote database. The only way
+ *     around it is a separate, single-session acknowledgement
+ *     (VERITY_DEV_REMOTE_DATABASE=<host> on the command line). It is refused
+ *     when saved in .env, it never unlocks migrations or the worker, and the
+ *     server warns loudly for the whole session. Normal development uses a
+ *     local database.
  *
  * A legitimate deployment sets NODE_ENV=production, DATABASE_URL and
  * VERITY_DATABASE_ACK=<the same host> in the host's environment.
  */
 
-export type GuardedPurpose = "worker" | "migrate" | "seed";
+export type GuardedPurpose = "api" | "worker" | "migrate" | "seed";
+
+export interface GuardEnv {
+  NODE_ENV?: string;
+  VERITY_DATABASE_ACK?: string;
+  VERITY_DEV_REMOTE_DATABASE?: string;
+  /** True when the dev acknowledgement is written in an env FILE (it must be passed per session instead). */
+  devAckInEnvFile?: boolean;
+}
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -37,15 +52,18 @@ export function isLocalDatabase(url: string): boolean {
 }
 
 /** Problems that forbid `purpose` from using `databaseUrl`; empty when allowed. Never includes the URL or credentials. */
-export function databaseTargetProblems(
-  purpose: GuardedPurpose,
-  databaseUrl: string,
-  env: { NODE_ENV?: string; VERITY_DATABASE_ACK?: string },
-): string[] {
+export function databaseTargetProblems(purpose: GuardedPurpose, databaseUrl: string, env: GuardEnv): string[] {
   if (isLocalDatabase(databaseUrl)) return [];
   const host = databaseHost(databaseUrl);
   if (!host) return ["DATABASE_URL is not a recognizable postgres:// URL"];
   if (purpose === "seed") return ["Refusing to seed demo data into a remote database; seeding is for local databases only"];
+  if (purpose === "api" && env.NODE_ENV !== "production") {
+    if (env.devAckInEnvFile) return ["VERITY_DEV_REMOTE_DATABASE must not be saved in .env; remove it (it is a one-session override)"];
+    if ((env.VERITY_DEV_REMOTE_DATABASE ?? "").trim().toLowerCase() !== host) {
+      return ["DATABASE_URL is a remote database, and a development API uses local databases only. Point DATABASE_URL at a local database (or remove it to use the embedded one)"];
+    }
+    return [];
+  }
   const problems: string[] = [];
   if (purpose === "worker" && env.NODE_ENV !== "production") {
     problems.push("The verification worker uses a remote database only with NODE_ENV=production (DATABASE_URL is not local)");
@@ -61,4 +79,10 @@ export class DatabaseTargetError extends Error {}
 export function assertDatabaseTarget(purpose: GuardedPurpose, databaseUrl: string, env: NodeJS.ProcessEnv = process.env): void {
   const problems = databaseTargetProblems(purpose, databaseUrl, env);
   if (problems.length > 0) throw new DatabaseTargetError(`Refusing to run (${purpose}):\n- ${problems.join("\n- ")}`);
+}
+
+/** Whether an env FILE assigns `key` (its value is never read or returned). Missing or unreadable file: false. */
+export function envFileDefines(contents: string | null, key: string): boolean {
+  if (!contents) return false;
+  return new RegExp(`^[ \\t]*(?:export[ \\t]+)?${key}[ \\t]*=[ \\t]*\\S`, "m").test(contents);
 }

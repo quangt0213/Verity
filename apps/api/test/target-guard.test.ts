@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { databaseTargetProblems, isLocalDatabase } from "../src/db/target-guard";
+import { databaseTargetProblems, envFileDefines, isLocalDatabase } from "../src/db/target-guard";
 import { loadWorkerConfig } from "../src/worker/config";
 
 /**
@@ -45,5 +45,50 @@ describe("database target guard", () => {
   it("is enforced by the worker configuration", () => {
     expect(() => loadWorkerConfig({ DATABASE_URL: REMOTE, NIMBLE_API_KEY: "k" })).toThrow(/NODE_ENV=production/);
     expect(() => loadWorkerConfig({ DATABASE_URL: LOCAL })).not.toThrow();
+  });
+
+  describe("the API process", () => {
+    const HOST = "aws-0-us-east-1.pooler.supabase.com";
+
+    it("starts on a local database in any mode", () => {
+      for (const NODE_ENV of ["development", "test", "production"]) expect(databaseTargetProblems("api", LOCAL, { NODE_ENV })).toEqual([]);
+      expect(databaseTargetProblems("api", "pglite:.data/pglite", {})).toEqual([]);
+    });
+
+    it("refuses a remote database in development, without suggesting an override or echoing the URL", () => {
+      const problems = databaseTargetProblems("api", REMOTE, { NODE_ENV: "development" });
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toMatch(/local database/);
+      expect(problems.join(" ")).not.toMatch(/VERITY_DEV_REMOTE_DATABASE|VERITY_DATABASE_ACK|secret|supabase\.com/);
+    });
+
+    it("does not accept the deployment acknowledgement in development (it must not double as a dev switch)", () => {
+      expect(databaseTargetProblems("api", REMOTE, { NODE_ENV: "development", VERITY_DATABASE_ACK: HOST })).toHaveLength(1);
+    });
+
+    it("allows a deliberate one-session development override only when it names the host and is not saved in .env", () => {
+      expect(databaseTargetProblems("api", REMOTE, { NODE_ENV: "development", VERITY_DEV_REMOTE_DATABASE: HOST })).toEqual([]);
+      expect(databaseTargetProblems("api", REMOTE, { NODE_ENV: "development", VERITY_DEV_REMOTE_DATABASE: "yes" })).toHaveLength(1);
+      const saved = databaseTargetProblems("api", REMOTE, { NODE_ENV: "development", VERITY_DEV_REMOTE_DATABASE: HOST, devAckInEnvFile: true });
+      expect(saved).toEqual(["VERITY_DEV_REMOTE_DATABASE must not be saved in .env; remove it (it is a one-session override)"]);
+    });
+
+    it("never lets the development override unlock migrations or the worker", () => {
+      expect(databaseTargetProblems("migrate", REMOTE, { VERITY_DEV_REMOTE_DATABASE: HOST })).toHaveLength(1);
+      expect(databaseTargetProblems("worker", REMOTE, { NODE_ENV: "development", VERITY_DEV_REMOTE_DATABASE: HOST })).toHaveLength(2);
+    });
+
+    it("runs in production with the deployment acknowledgement, and only with it", () => {
+      expect(databaseTargetProblems("api", REMOTE, { NODE_ENV: "production", VERITY_DATABASE_ACK: HOST })).toEqual([]);
+      expect(databaseTargetProblems("api", REMOTE, { NODE_ENV: "production" })).toHaveLength(1);
+      expect(databaseTargetProblems("api", REMOTE, { NODE_ENV: "production", VERITY_DEV_REMOTE_DATABASE: HOST })).toHaveLength(1);
+    });
+
+    it("detects the override saved in an env file without reading its value", () => {
+      expect(envFileDefines("DATABASE_URL=x\nVERITY_DEV_REMOTE_DATABASE=host\n", "VERITY_DEV_REMOTE_DATABASE")).toBe(true);
+      expect(envFileDefines("export VERITY_DEV_REMOTE_DATABASE=host", "VERITY_DEV_REMOTE_DATABASE")).toBe(true);
+      expect(envFileDefines("# VERITY_DEV_REMOTE_DATABASE=host\nVERITY_DEV_REMOTE_DATABASE=\n", "VERITY_DEV_REMOTE_DATABASE")).toBe(false);
+      expect(envFileDefines(null, "VERITY_DEV_REMOTE_DATABASE")).toBe(false);
+    });
   });
 });

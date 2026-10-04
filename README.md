@@ -114,8 +114,9 @@ node apps/api/dist/server.js                 # cwd apps/api, so ./drizzle is fou
 **Remote-database acknowledgement.** Commands that write schema or process
 jobs refuse a non-local `DATABASE_URL` unless `VERITY_DATABASE_ACK` equals that
 database's host name (copying the host on purpose; a stale `.env` can't do it):
-`migrate` (and `MIGRATE_ON_START=true`) needs the acknowledgement; the worker
-needs it **and** `NODE_ENV=production`; demo seeding never touches a remote
+`migrate` (and `MIGRATE_ON_START=true`) needs the acknowledgement; the API and
+the worker need it **and** `NODE_ENV=production`; demo seeding never touches a
+remote database. A development API (`npm run dev:api`) refuses a remote
 database. Local databases (PGlite, Postgres on a loopback address) need
 nothing. See `apps/api/src/db/target-guard.ts`.
 
@@ -128,6 +129,7 @@ yet exercised in CI).
 | --- | --- |
 | `NODE_ENV` | `production` |
 | `DATABASE_URL` | Postgres URL (with `sslmode=require` for hosted Postgres) |
+| `VERITY_DATABASE_ACK` | The host name of `DATABASE_URL` (not a secret): confirms the remote database on purpose |
 | `SESSION_SECRET` | 32+ random characters |
 | `VERITY_PUBLIC_URL` | The service's https URL |
 | `VERITY_ALLOWED_ORIGINS` | Exact origins of the Verity clients (today: the Maypop app origin) |

@@ -243,7 +243,13 @@ remote, and for a remote database:
   `VERITY_DATABASE_ACK` to equal the database host;
 - **the verification worker** requires that acknowledgement **and**
   `NODE_ENV=production`, so a development worker can't process real jobs;
-- **demo seeding** (which also migrates) is refused outright.
+- **demo seeding** (which also migrates) is refused outright;
+- **the API** in production mode requires the same acknowledgement, and a
+  **development API** (`npm run dev:api`) refuses a remote database. The refusal
+  only points to a local database. A deliberate one-session exception exists
+  for debugging: `VERITY_DEV_REMOTE_DATABASE=<host>` passed on the command line.
+  It is refused when saved in `.env`, never unlocks migrations or the worker,
+  and the server warns for the whole session.
 
 Refusals name the variables, never the URL or credentials (tested). The
 real-PostgreSQL test suites accept only a local `TEST_DATABASE_URL`, refuse
