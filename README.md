@@ -107,9 +107,17 @@ platform, with any managed Postgres.
 
 ```sh
 npm ci && npm run build -w @verity/api       # → apps/api/dist/{server,migrate}.js
-node apps/api/dist/migrate.js                # apply migrations (or set MIGRATE_ON_START=true)
+VERITY_DATABASE_ACK=<db host> node apps/api/dist/migrate.js   # apply migrations (or MIGRATE_ON_START=true)
 node apps/api/dist/server.js                 # cwd apps/api, so ./drizzle is found
 ```
+
+**Remote-database acknowledgement.** Commands that write schema or process
+jobs refuse a non-local `DATABASE_URL` unless `VERITY_DATABASE_ACK` equals that
+database's host name (copying the host on purpose; a stale `.env` can't do it):
+`migrate` (and `MIGRATE_ON_START=true`) needs the acknowledgement; the worker
+needs it **and** `NODE_ENV=production`; demo seeding never touches a remote
+database. Local databases (PGlite, Postgres on a loopback address) need
+nothing. See `apps/api/src/db/target-guard.ts`.
 
 A container build is in `apps/api/Dockerfile` (build from the repo root; not
 yet exercised in CI).
@@ -141,7 +149,19 @@ start in production without a key, or with a Nimble URL other than
 ```sh
 npm run build -w @verity/api                 # → apps/api/dist/worker.js alongside server.js
 node apps/api/dist/worker.js                 # cwd apps/api; same image as the API, different command
-npm run dev:worker                           # development (needs a postgres:// DATABASE_URL)
+npm run dev:worker                           # development: a LOCAL postgres:// DATABASE_URL only
+```
+
+Production runs need `NODE_ENV=production` and `VERITY_DATABASE_ACK=<db host>`
+(see above).
+
+**Real-PostgreSQL tests** (worker concurrency, leases, fencing, atomic
+transitions, end-to-end flows with mocked providers): point
+`TEST_DATABASE_URL` at a local, disposable server, never a hosted one. Each
+suite creates, migrates and drops its own database.
+
+```sh
+TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55432/postgres npm run test:concurrency -w @verity/api
 ```
 
 - The API never starts verification work. Scale the API and the worker

@@ -84,7 +84,9 @@ export async function enqueueWorkerJob(
     // An open job already exists: make sure it runs no later than requested.
     await tx
       .update(verificationJobs)
-      .set({ availableAt: sql`least(${verificationJobs.availableAt}, ${input.availableAt})`, updatedAt: input.now })
+      // An explicit timestamptz parameter: postgres.js can't encode a raw Date inside an sql`` fragment
+      // (PGlite could, so only the real-PostgreSQL suite caught this).
+      .set({ availableAt: sql`least(${verificationJobs.availableAt}, ${input.availableAt.toISOString()}::timestamptz)`, updatedAt: input.now })
       .where(and(eq(verificationJobs.eventId, input.eventId), eq(verificationJobs.status, "pending")));
   }
   return inserted.length === 1;

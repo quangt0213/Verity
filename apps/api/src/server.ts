@@ -1,6 +1,7 @@
 import { buildApp } from "./app";
 import { ConfigError, loadConfig } from "./config";
 import { createDatabase } from "./db/client";
+import { databaseTargetProblems } from "./db/target-guard";
 
 async function main() {
   let config;
@@ -12,6 +13,14 @@ async function main() {
     process.exit(1);
   }
 
+  // Migrating a remote database on start needs the same explicit acknowledgement as `db:migrate`.
+  if (process.env.MIGRATE_ON_START === "true") {
+    const refusal = databaseTargetProblems("migrate", config.databaseUrl, process.env);
+    if (refusal.length > 0) {
+      console.error(`Refusing to migrate on start:\n- ${refusal.join("\n- ")}`);
+      process.exit(1);
+    }
+  }
   const database = createDatabase(config.databaseUrl);
   if (database.kind === "pglite" || process.env.MIGRATE_ON_START === "true") await database.migrate();
 

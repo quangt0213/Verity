@@ -232,6 +232,23 @@ the new table is protected.
 Connect with `sslmode=require` in `DATABASE_URL`. postgres.js doesn't use TLS
 unless the URL asks for it.
 
+## Database target guard
+
+A developer's `apps/api/.env` can point at the production database, and
+"remember not to run it" is not a safeguard. `apps/api/src/db/target-guard.ts`
+classifies `DATABASE_URL` as local (PGlite, Postgres on a loopback address) or
+remote, and for a remote database:
+
+- **migrations** (`db:migrate`, `MIGRATE_ON_START=true`) require
+  `VERITY_DATABASE_ACK` to equal the database host;
+- **the verification worker** requires that acknowledgement **and**
+  `NODE_ENV=production`, so a development worker can't process real jobs;
+- **demo seeding** (which also migrates) is refused outright.
+
+Refusals name the variables, never the URL or credentials (tested). The
+real-PostgreSQL test suites accept only a local `TEST_DATABASE_URL`, refuse
+Supabase hosts and never read `DATABASE_URL`.
+
 ## User-submitted URLs (SSRF)
 
 **Phase 2: validate and store, never fetch.**

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ConfigError, presentEnv, resolveDatabaseUrl } from "../config";
+import { databaseTargetProblems } from "../db/target-guard";
 
 /**
  * Configuration for the verification worker, a separate process from the API.
@@ -25,6 +26,8 @@ const workerEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
   DATABASE_URL: z.string().optional(),
+  /** Must equal DATABASE_URL's host for the worker to use a remote database (see db/target-guard.ts). */
+  VERITY_DATABASE_ACK: z.string().optional(),
   NIMBLE_API_KEY: z.string().optional(),
   NIMBLE_BASE_URL: z.string().optional(),
   VERIFICATION_WORKER_CONCURRENCY: int(1, 8, 2),
@@ -109,6 +112,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   const problems: string[] = [];
 
   const databaseUrl = resolveDatabaseUrl(e.DATABASE_URL, e.NODE_ENV, problems);
+  // A development worker must never process jobs in a remote (e.g. production) database by accident.
+  if (databaseUrl) problems.push(...databaseTargetProblems("worker", databaseUrl, { NODE_ENV: e.NODE_ENV, VERITY_DATABASE_ACK: e.VERITY_DATABASE_ACK }));
   const apiKey = e.NIMBLE_API_KEY?.trim() || null;
   if (production && !apiKey) problems.push("NIMBLE_API_KEY is required for the verification worker in production");
   const baseUrl = checkBaseUrl(e.NIMBLE_BASE_URL ?? NIMBLE_DEFAULT_BASE_URL, production, problems);

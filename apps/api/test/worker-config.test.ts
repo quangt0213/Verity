@@ -6,7 +6,8 @@ const KEY = "nimble-test-key-0123456789abcdef";
 const DB = "postgres://verity:db-password@db.internal:5432/verity?sslmode=require";
 
 // The worker needs only the database and Nimble: no session secret, SMTP or origins.
-const goodProduction = { NODE_ENV: "production", DATABASE_URL: DB, NIMBLE_API_KEY: KEY };
+// A remote database needs the explicit acknowledgement naming its host (db/target-guard.ts).
+const goodProduction = { NODE_ENV: "production", DATABASE_URL: DB, NIMBLE_API_KEY: KEY, VERITY_DATABASE_ACK: "db.internal" };
 
 function errorMessage(fn: () => unknown): string {
   try {

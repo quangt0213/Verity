@@ -7,6 +7,7 @@ import { verificationJobs } from "../../src/db/schema";
 import { claimJobs, heartbeat, type Lease } from "../../src/worker/jobs";
 import { claimAgentSlot, ensureRun } from "../../src/worker/runs";
 import { testConfig } from "../worker/harness";
+import { target } from "./pg-target";
 
 /**
  * OPT-IN: true concurrency against a real PostgreSQL server (PGlite has one
@@ -19,18 +20,6 @@ import { testConfig } from "../worker/harness";
  * It creates its own throwaway database, migrates it, and drops it afterwards.
  * It never reads DATABASE_URL and refuses hosted/remote servers.
  */
-
-const target = process.env.TEST_DATABASE_URL;
-
-function refuseUnsafe(url: string): void {
-  const parsed = new URL(url);
-  if (/supabase\.(co|com)$/i.test(parsed.hostname)) throw new Error("Refusing to run the concurrency suite against Supabase.");
-  if (process.env.DATABASE_URL && process.env.DATABASE_URL === url) throw new Error("TEST_DATABASE_URL must not be the application's DATABASE_URL.");
-  if (!["localhost", "127.0.0.1", "[::1]", "::1"].includes(parsed.hostname)) {
-    throw new Error("TEST_DATABASE_URL must point at a local, disposable PostgreSQL server.");
-  }
-}
-if (target) refuseUnsafe(target);
 
 describe.skipIf(!target)("job claiming on real PostgreSQL (separate connections)", () => {
   const dbName = `verity_concurrency_${randomBytes(4).toString("hex")}`;
@@ -55,6 +44,7 @@ describe.skipIf(!target)("job claiming on real PostgreSQL (separate connections)
     await admin?.end();
   });
 
+  let seeded = 0;
   async function seedJobs(n: number): Promise<string[]> {
     const ids: string[] = [];
     for (let i = 0; i < n; i++) {
@@ -64,7 +54,7 @@ describe.skipIf(!target)("job claiming on real PostgreSQL (separate connections)
       )) as unknown as Array<{ id: string }>;
       const [job] = await a.db
         .insert(verificationJobs)
-        .values({ kind: "VERIFY_EVENT", eventId: event!.id, reason: "NEW_REPORT", idempotencyKey: `conc:${dbName}:${i}`, availableAt: new Date(0) })
+        .values({ kind: "VERIFY_EVENT", eventId: event!.id, reason: "NEW_REPORT", idempotencyKey: `conc:${dbName}:${seeded++}:${i}`, availableAt: new Date(0) })
         .returning({ id: verificationJobs.id });
       ids.push(job!.id);
     }
@@ -83,7 +73,7 @@ describe.skipIf(!target)("job claiming on real PostgreSQL (separate connections)
     const mine = claimed.filter((l) => ids.includes(l.jobId));
     expect(new Set(mine.map((l) => l.jobId)).size).toBe(mine.length);
     expect(mine.length).toBe(40);
-    const rows = (await a.db.execute(sql`select attempts, locked_by from verification_jobs where id = any(${ids})`)) as unknown as Array<{ attempts: number; locked_by: string }>;
+    const rows = (await a.db.execute(sql`select attempts, locked_by from verification_jobs where id in ${ids}`)) as unknown as Array<{ attempts: number; locked_by: string }>;
     expect(rows.every((r) => r.attempts === 1)).toBe(true);
     for (const lease of mine) expect(rows.some((r) => r.locked_by === lease.workerId)).toBe(true);
   });
