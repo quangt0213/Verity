@@ -30,7 +30,8 @@ describe("app shell", () => {
     renderWithApp(<></>, { routes, path: "/events/00000000-0000-4000-8000-000000000101" });
     expect(await screen.findByRole("heading", { level: 1, name: /US-101 northbound closed/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Why Verity says this" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Community" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sources" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Community input" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Timeline" })).toBeInTheDocument();
     expect(screen.getByText("Verified by current evidence.")).toBeInTheDocument();
   });

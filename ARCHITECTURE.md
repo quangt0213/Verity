@@ -122,8 +122,21 @@ scheduled_start_at, scheduled_end_at, expires_at, is_demo
 **Evidence** records separate `quote` (verbatim source text) from `agent_note`
 (Verity's research agent in its own words). The UI labels the latter "not a
 quote". Each record also carries `lineage_id`, `counts_as_independent`,
-`is_primary`, `source_class`, `freshness_state`, `location_match` and
-`time_match`.
+`is_primary`, `source_class`, `freshness_state`, `location_match`,
+`time_match`, `published_at_precision` (`instant` or `day`) and `found_via`
+(`community_report`, `web_search`, `extended_verification`: provider-neutral,
+and never a trust signal). No provider identifiers, model text, page bodies or
+pipeline metadata are exposed.
+
+**Event detail** is four separate parts: the status, "Why Verity says this"
+(the deterministic engine's explanation), "Sources" and "Community input".
+Sources are grouped by underlying report: one entry per independent source,
+with "Also reported by N other pages using the same underlying report" and
+"Repeats reporting from X" for the copies, so many pages never look like many
+confirmations. Labels are plain language ("Official source", "Primary source",
+"Published 18 min ago", "Published Oct 4 (date only)", "Out of date"). Sources
+first found during the Agent investigation say only "Source discovered during
+extended verification".
 
 ### Presentation of trust
 

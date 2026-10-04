@@ -50,7 +50,7 @@ describe("evidence comes only from citations", () => {
       retrievalSteps: ["agent"],
       classifiedBy: "rules",
       providerRequestId: "task_run_1",
-      note: "Cited by Verity's research agent.",
+      note: null,
     });
   });
 

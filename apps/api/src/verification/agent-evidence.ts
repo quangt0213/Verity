@@ -173,7 +173,8 @@ export function citedPageTarget(cited: { url: string; title: string | null }, in
     publishedAtPrecision: null,
     retrievedAt: input.now,
     excerpt: null,
-    note: "Cited by Verity's research agent.",
+    // Provenance is shown as found_via ("extended verification"), never as a note that reads like trust.
+    note: null,
     stance: "context",
     locationMatch: matchLocation(cited.title ?? "", input.context),
     isPrimary: official?.primaryForCategory ?? false,
@@ -269,7 +270,8 @@ export function agentEvidence(input: {
       publishedAtPrecision: published?.precision ?? null,
       retrievedAt: input.now,
       excerpt,
-      note: "Cited by Verity's research agent.",
+      // Provenance is shown as found_via ("extended verification"), never as a note that reads like trust.
+    note: null,
       stance,
       locationMatch: matchLocation([group.title ?? "", excerpt ?? ""].join(". "), input.context),
       isPrimary: official?.primaryForCategory ?? false,

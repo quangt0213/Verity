@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sourceRecords } from "../../src/db/schema";
 import { sweepAgentResources } from "../../src/worker/escalate";
 import type { AgentPoll } from "../../src/worker/ports";
+import { evidenceSchema } from "@verity/contracts";
 import { processJob } from "../../src/worker/process";
 import { createTestContext, type TestContext } from "../helpers";
 import {
@@ -155,6 +156,26 @@ describe("citations without verbatim text (as the live low-effort run returned)"
     expect(record.publishedAt!.toISOString()).toBe(clock.ago(8).toISOString());
     expect(record.extractionMetadata).toMatchObject({ retrieval_steps: ["agent", "extract"] });
     expect((await eventRow(ctx, eventId)).status).toBe("VERIFIED");
+  });
+
+  it("exposes only the contract's evidence fields through the API, with provenance in plain terms", async () => {
+    const clock = new FakeClock();
+    const eventId = await newEvent(ctx, reporter());
+    const url = caltrans(clock);
+    const extractor = fakeExtractor({ [url]: pageRead(url, "All lanes of Test St are closed for emergency repairs.", clock.ago(8)) });
+    await processJob(deps(ctx, clock, { retriever: oneSource(clock), investigator: fakeInvestigator({ poll: () => textless(url) }), extractor }), await claimFor(ctx, clock, eventId));
+    const res = await ctx.request({ method: "GET", url: `/api/v1/events/${eventId}/evidence` });
+    const { evidence } = res.json() as { evidence: Array<Record<string, unknown>> };
+    const allowed = Object.keys(evidenceSchema.shape).sort();
+    for (const e of evidence) expect(Object.keys(e).sort()).toEqual(allowed);
+    const byVia = Object.fromEntries(evidence.map((e) => [e.source_url ?? "community", e.found_via]));
+    expect(byVia[url]).toBe("extended_verification");
+    expect(byVia.community).toBe("community_report");
+    expect(Object.values(byVia)).toContain("web_search");
+    // No provider identifiers, raw metadata, page bodies, model text or reporter identity.
+    const body = JSON.stringify(evidence);
+    expect(body).not.toMatch(/task_run|task_fake|agent_\d|extract_ref|extraction_metadata|final_url|retrieval_steps|provider|escalation-\d@example\.com|reporter_id|user_id/);
+    expect(evidence.find((e) => e.source_url === url)).toMatchObject({ agent_note: null, published_at_precision: "instant", source_class: "OFFICIAL" });
   });
 
   it("never exceeds the job's extraction ceiling for cited pages", async () => {

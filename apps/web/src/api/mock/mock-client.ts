@@ -281,6 +281,7 @@ export function createMockApi(options: MockApiOptions): VerityApi {
             publisher: null,
             published_at: at,
             published_at_precision: "instant",
+            found_via: "community_report",
             retrieved_at: at,
             quote: report.description || report.title,
             agent_note: null,

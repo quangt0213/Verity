@@ -6,6 +6,7 @@ import {
   TIME_PRECISIONS,
   isoDateTime,
   type EvidenceStance,
+  type FoundVia,
   type SourceClass,
   type TimePrecision,
 } from "@verity/contracts";
@@ -217,6 +218,18 @@ export function storedPublishedPrecision(row: Pick<SourceRecordRow, "publishedAt
   if (!row.publishedAt) return null;
   const parsed = extractionMetadataSchema.safeParse(row.extractionMetadata);
   return (parsed.success ? parsed.data.published_at_precision : null) ?? "instant";
+}
+
+/**
+ * How Verity came across a stored source, for display: community reports,
+ * ordinary web search (including pages read afterwards), or sources first
+ * found during the extended (Agent) investigation.
+ */
+export function storedFoundVia(row: Pick<SourceRecordRow, "sourceType" | "extractionMetadata">): FoundVia {
+  if (row.sourceType === "community_report") return "community_report";
+  const parsed = extractionMetadataSchema.safeParse(row.extractionMetadata);
+  const steps = parsed.success ? (parsed.data.retrieval_steps ?? [parsed.data.retrieval_method]) : [];
+  return steps[0] === "agent" ? "extended_verification" : "web_search";
 }
 
 /** Read a stored record back. Community reports (Phase 2) carry no metadata and map to sensible defaults. */

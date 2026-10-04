@@ -123,8 +123,11 @@ export function CommunitySection({ event }: { event: EventDetail }) {
   return (
     <section aria-labelledby="community-heading">
       <h2 id="community-heading" className="text-base font-semibold">
-        Community
+        Community input
       </h2>
+      <p className="mt-1 text-xs text-muted">
+        What people nearby are saying. It helps Verity decide what to re-check, but it never verifies an event on its own.
+      </p>
 
       <div className="mt-2 flex items-start gap-2 text-sm">
         <Icon icon={Users} size={16} className="mt-0.5 shrink-0 text-muted" />

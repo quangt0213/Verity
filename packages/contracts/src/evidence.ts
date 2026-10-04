@@ -49,6 +49,16 @@ export const TIME_PRECISIONS = ["instant", "day"] as const;
 export type TimePrecision = (typeof TIME_PRECISIONS)[number];
 export const timePrecisionSchema = z.enum(TIME_PRECISIONS);
 
+/**
+ * How Verity came across a source, in provider-neutral terms (no vendor or
+ * pipeline details). "extended_verification": found while Verity investigated
+ * further because ordinary searching wasn't enough. It never makes a source
+ * more trustworthy; trust comes from the source itself.
+ */
+export const FOUND_VIA = ["community_report", "web_search", "extended_verification"] as const;
+export type FoundVia = (typeof FOUND_VIA)[number];
+export const foundViaSchema = z.enum(FOUND_VIA);
+
 export const TIME_MATCHES = ["current", "recent", "outdated", "unclear"] as const;
 export const timeMatchSchema = z.enum(TIME_MATCHES);
 
@@ -84,5 +94,6 @@ export const evidenceSchema = z.object({
   freshness_state: freshnessStateSchema,
   location_match: locationMatchSchema,
   time_match: timeMatchSchema,
+  found_via: foundViaSchema,
 });
 export type Evidence = z.infer<typeof evidenceSchema>;
