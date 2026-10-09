@@ -229,8 +229,29 @@ RLS on `verification_runs` and revokes the client roles explicitly.
 Supabase-like roles to the current schema and checks that no rows are lost and
 the new table is protected.
 
-Connect with `sslmode=require` in `DATABASE_URL`. postgres.js doesn't use TLS
-unless the URL asks for it.
+### Database TLS
+
+Every connection to a **non-local** database verifies the server's certificate
+chain and host name, in every `NODE_ENV`: the API, the worker and the migration
+runner alike (`apps/api/src/db/tls.ts`, `apps/api/src/db/client.ts`).
+
+- `VERITY_DB_CA_PATH` names the PEM CA certificate (bundle) that signs the
+  database's certificate. For Supabase, this is the project's
+  `prod-ca-2021.crt`. It's public, not a secret, but stays outside the repo.
+- Configuration validation reads it before anything connects. A missing,
+  unreadable, non-PEM or unparsable file, or one that contains a private key,
+  refuses to start. Errors name the variable, never the path, URL or
+  credentials.
+- postgres.js treats `sslmode=require` as "encrypt, don't verify". Verity
+  passes an explicit `ssl: { ca, rejectUnauthorized: true }` option, which
+  overrides any `sslmode` in the URL, including `disable`, so the URL can't
+  weaken verification (tested against postgres.js itself).
+- `createDatabase` refuses a non-local URL without a CA as a second line of
+  defense, so no caller can open an unverified remote connection.
+- The migration runner loads only the database settings (`loadDatabaseConfig`),
+  so migrating in production mode doesn't push operators toward placeholder API
+  secrets or a weaker mode.
+- Local databases (PGlite, Postgres on a loopback address) need no CA.
 
 ## Database target guard
 

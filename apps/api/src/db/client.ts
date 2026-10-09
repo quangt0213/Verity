@@ -9,6 +9,8 @@ import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
 import { migrate as migratePostgres } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import * as schema from "./schema";
+import { isLocalDatabase } from "./target-guard";
+import { DatabaseTlsError } from "./tls";
 
 export type Schema = typeof schema;
 export type Database = PgDatabase<PgQueryResultHKT, Schema>;
@@ -21,6 +23,23 @@ export interface DatabaseHandle {
   kind: "postgres" | "pglite";
   migrate(): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface DatabaseOptions {
+  /** PEM CA bundle from resolveDatabaseCa (db/tls.ts). Required for a non-local database. */
+  ca?: string | null;
+}
+
+/**
+ * postgres.js options. A non-local database always verifies the server's
+ * certificate chain and host name against `ca`; the explicit `ssl` option
+ * overrides any `sslmode` in the URL, so the URL can't turn verification off.
+ */
+export function postgresOptions(url: string, ca: string | null): NonNullable<Parameters<typeof postgres>[1]> {
+  const base = { max: 10, idle_timeout: 20, connect_timeout: 10, onnotice: () => undefined };
+  if (isLocalDatabase(url)) return base;
+  if (!ca) throw new DatabaseTlsError("Refusing to connect: a remote database requires VERITY_DB_CA_PATH (certificate verification)");
+  return { ...base, ssl: { ca, rejectUnauthorized: true } };
 }
 
 function migrationsFolder(): string {
@@ -40,8 +59,11 @@ function migrationsFolder(): string {
  * Production uses Postgres (postgres.js, parameterized queries only). Local
  * development and tests can use PGlite, real Postgres compiled to WASM, so no
  * database server is required: "pglite:memory" or "pglite:<directory>".
+ *
+ * A non-local Postgres needs `options.ca`, the CA bundle validated by the
+ * configuration (db/tls.ts); without it this refuses before connecting.
  */
-export function createDatabase(url: string): DatabaseHandle {
+export function createDatabase(url: string, options: DatabaseOptions = {}): DatabaseHandle {
   if (url.startsWith("pglite:")) {
     const target = url.slice("pglite:".length);
     let client: PGlite;
@@ -60,7 +82,7 @@ export function createDatabase(url: string): DatabaseHandle {
     };
   }
 
-  const sql = postgres(url, { max: 10, idle_timeout: 20, connect_timeout: 10, onnotice: () => undefined });
+  const sql = postgres(url, postgresOptions(url, options.ca ?? null));
   const db = drizzlePostgres(sql, { schema }) as unknown as Database;
   return {
     db,

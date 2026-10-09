@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveDatabaseCa } from "./db/tls";
 
 /**
  * Service configuration from environment variables, validated at startup.
@@ -44,6 +45,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
   DATABASE_URL: z.string().optional(),
+  /** CA bundle (PEM) that verifies a remote database's TLS certificate (db/tls.ts). */
+  VERITY_DB_CA_PATH: z.string().optional(),
   SESSION_SECRET: z.string().optional(),
   VERITY_PUBLIC_URL: z.string().optional(),
   VERITY_ALLOWED_ORIGINS: z.string().optional(),
@@ -70,6 +73,8 @@ export interface AppConfig {
   logLevel: string;
   /** postgres:// URL, or a PGlite target ("pglite:memory" or "pglite:<dir>") outside production. */
   databaseUrl: string;
+  /** PEM CA bundle for a remote database; null for a local one. */
+  databaseCa: string | null;
   sessionSecret: string;
   publicUrl: string;
   allowedOrigins: string[];
@@ -113,6 +118,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const problems: string[] = [];
 
   const databaseUrl = resolveDatabaseUrl(e.DATABASE_URL, e.NODE_ENV, problems);
+  const databaseCa = resolveDatabaseCa(databaseUrl, e.VERITY_DB_CA_PATH, problems);
 
   const sessionSecret = e.SESSION_SECRET || (production ? "" : DEV_SESSION_SECRET);
   if (production && (sessionSecret.length < 32 || sessionSecret === DEV_SESSION_SECRET)) {
@@ -149,6 +155,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port,
     logLevel: e.LOG_LEVEL ?? (e.NODE_ENV === "test" ? "silent" : "info"),
     databaseUrl,
+    databaseCa,
     sessionSecret,
     publicUrl,
     allowedOrigins,
@@ -156,4 +163,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     email: { transport, from, smtpUrl: e.SMTP_URL, outboxDir: e.DEV_OUTBOX_DIR || ".data/dev-outbox" },
     internalApiToken,
   };
+}
+
+export interface DatabaseConfig {
+  env: "development" | "test" | "production";
+  databaseUrl: string;
+  /** PEM CA bundle for a remote database; null for a local one. */
+  databaseCa: string | null;
+}
+
+const databaseEnvSchema = envSchema.pick({ NODE_ENV: true, DATABASE_URL: true, VERITY_DB_CA_PATH: true });
+
+/**
+ * Only what a database command (migrations) needs: the URL and, for a remote
+ * database, a verified CA. No session secret, SMTP or origins, so migrating
+ * in production mode doesn't require the API's secrets.
+ */
+export function loadDatabaseConfig(env: NodeJS.ProcessEnv = process.env): DatabaseConfig {
+  const parsed = databaseEnvSchema.safeParse(presentEnv(env));
+  if (!parsed.success) {
+    throw new ConfigError(`Invalid environment: ${parsed.error.issues.map((i) => i.path.join(".")).join(", ")}`);
+  }
+  const e = parsed.data;
+  const problems: string[] = [];
+  const databaseUrl = resolveDatabaseUrl(e.DATABASE_URL, e.NODE_ENV, problems);
+  const databaseCa = resolveDatabaseCa(databaseUrl, e.VERITY_DB_CA_PATH, problems);
+  if (problems.length > 0) throw new ConfigError(`Refusing to start:\n- ${problems.join("\n- ")}`);
+  return { env: e.NODE_ENV, databaseUrl, databaseCa };
 }

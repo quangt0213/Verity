@@ -41,7 +41,7 @@ async function main() {
       process.exit(1);
     }
   }
-  const database = createDatabase(config.databaseUrl);
+  const database = createDatabase(config.databaseUrl, { ca: config.databaseCa });
   if (database.kind === "pglite" || process.env.MIGRATE_ON_START === "true") await database.migrate();
 
   const app = await buildApp({ config, db: database.db });

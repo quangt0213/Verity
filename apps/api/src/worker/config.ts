@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ConfigError, presentEnv, resolveDatabaseUrl } from "../config";
 import { databaseTargetProblems } from "../db/target-guard";
+import { resolveDatabaseCa } from "../db/tls";
 
 /**
  * Configuration for the verification worker, a separate process from the API.
@@ -28,6 +29,8 @@ const workerEnvSchema = z.object({
   DATABASE_URL: z.string().optional(),
   /** Must equal DATABASE_URL's host for the worker to use a remote database (see db/target-guard.ts). */
   VERITY_DATABASE_ACK: z.string().optional(),
+  /** CA bundle (PEM) that verifies a remote database's TLS certificate (db/tls.ts). */
+  VERITY_DB_CA_PATH: z.string().optional(),
   NIMBLE_API_KEY: z.string().optional(),
   NIMBLE_BASE_URL: z.string().optional(),
   VERIFICATION_WORKER_CONCURRENCY: int(1, 8, 2),
@@ -54,6 +57,8 @@ export interface WorkerConfig {
   env: "development" | "test" | "production";
   logLevel: string;
   databaseUrl: string;
+  /** PEM CA bundle for a remote database; null for a local one. */
+  databaseCa: string | null;
   concurrency: number;
   pollIntervalMs: number;
   /** A claimed job is reclaimable after this long without completing. */
@@ -114,6 +119,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   const databaseUrl = resolveDatabaseUrl(e.DATABASE_URL, e.NODE_ENV, problems);
   // A development worker must never process jobs in a remote (e.g. production) database by accident.
   if (databaseUrl) problems.push(...databaseTargetProblems("worker", databaseUrl, { NODE_ENV: e.NODE_ENV, VERITY_DATABASE_ACK: e.VERITY_DATABASE_ACK }));
+  const databaseCa = resolveDatabaseCa(databaseUrl, e.VERITY_DB_CA_PATH, problems);
   const apiKey = e.NIMBLE_API_KEY?.trim() || null;
   if (production && !apiKey) problems.push("NIMBLE_API_KEY is required for the verification worker in production");
   const baseUrl = checkBaseUrl(e.NIMBLE_BASE_URL ?? NIMBLE_DEFAULT_BASE_URL, production, problems);
@@ -139,6 +145,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     env: e.NODE_ENV,
     logLevel: e.LOG_LEVEL ?? (e.NODE_ENV === "test" ? "silent" : "info"),
     databaseUrl,
+    databaseCa,
     concurrency: e.VERIFICATION_WORKER_CONCURRENCY,
     pollIntervalMs: e.VERIFICATION_POLL_INTERVAL_MS,
     leaseSeconds: e.VERIFICATION_LEASE_SECONDS,
@@ -161,7 +168,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   // Keep the key and database URL out of anything that serializes the config (e.g. a log line).
   Object.defineProperty(config, "toJSON", {
     enumerable: false,
-    value: () => ({ ...config, databaseUrl: "[redacted]", nimble: { ...config.nimble, apiKey: config.nimble.apiKey ? "[redacted]" : null } }),
+    value: () => ({ ...config, databaseUrl: "[redacted]", databaseCa: config.databaseCa ? "[set]" : null, nimble: { ...config.nimble, apiKey: config.nimble.apiKey ? "[redacted]" : null } }),
   });
   return config;
 }

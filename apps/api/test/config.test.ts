@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { ConfigError, loadConfig } from "../src/config";
+import { caFixture } from "./ca-fixture";
+
+const ca = caFixture();
+afterAll(() => ca.cleanup());
 
 const goodProduction = {
   NODE_ENV: "production",
   DATABASE_URL: "postgres://verity:secret@db.internal:5432/verity",
+  VERITY_DB_CA_PATH: ca.valid,
   SESSION_SECRET: "a".repeat(48),
   VERITY_PUBLIC_URL: "https://api.verity.example",
   VERITY_ALLOWED_ORIGINS: "https://verity-app.maypop.example",
@@ -21,6 +26,7 @@ describe("configuration", () => {
   it.each([
     ["missing DATABASE_URL", { DATABASE_URL: "" }],
     ["embedded database", { DATABASE_URL: "pglite:.data" }],
+    ["remote database without a CA", { VERITY_DB_CA_PATH: "" }],
     ["short session secret", { SESSION_SECRET: "short" }],
     ["missing allowed origins", { VERITY_ALLOWED_ORIGINS: "" }],
     ["wildcard origin", { VERITY_ALLOWED_ORIGINS: "https://*.maypop.example" }],
