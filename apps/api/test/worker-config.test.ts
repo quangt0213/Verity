@@ -1,13 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { ConfigError, loadConfig } from "../src/config";
 import { loadWorkerConfig } from "../src/worker/config";
+import { caFixture } from "./ca-fixture";
 
 const KEY = "nimble-test-key-0123456789abcdef";
 const DB = "postgres://verity:db-password@db.internal:5432/verity?sslmode=require";
 
 // The worker needs only the database and Nimble: no session secret, SMTP or origins.
-// A remote database needs the explicit acknowledgement naming its host (db/target-guard.ts).
-const goodProduction = { NODE_ENV: "production", DATABASE_URL: DB, NIMBLE_API_KEY: KEY, VERITY_DATABASE_ACK: "db.internal" };
+// A remote database needs the explicit acknowledgement naming its host (db/target-guard.ts)
+// and a CA that verifies its certificate (db/tls.ts).
+const ca = caFixture();
+afterAll(() => ca.cleanup());
+const goodProduction = { NODE_ENV: "production", DATABASE_URL: DB, NIMBLE_API_KEY: KEY, VERITY_DATABASE_ACK: "db.internal", VERITY_DB_CA_PATH: ca.valid };
 
 function errorMessage(fn: () => unknown): string {
   try {
@@ -40,6 +44,7 @@ describe("verification worker configuration", () => {
   it.each([
     ["missing NIMBLE_API_KEY", { NIMBLE_API_KEY: "" }],
     ["embedded database", { DATABASE_URL: "pglite:.data" }],
+    ["remote database without a CA", { VERITY_DB_CA_PATH: "" }],
     ["missing DATABASE_URL", { DATABASE_URL: "" }],
     ["http Nimble URL", { NIMBLE_BASE_URL: "http://sdk.nimbleway.com" }],
     ["unknown Nimble host", { NIMBLE_BASE_URL: "https://nimble.attacker.example" }],
@@ -86,6 +91,7 @@ describe("verification worker configuration", () => {
     const api = loadConfig({
       NODE_ENV: "production",
       DATABASE_URL: DB,
+      VERITY_DB_CA_PATH: ca.valid,
       SESSION_SECRET: "a".repeat(48),
       VERITY_PUBLIC_URL: "https://api.verity.example",
       VERITY_ALLOWED_ORIGINS: "https://verity-app.maypop.example",

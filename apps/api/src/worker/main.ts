@@ -37,7 +37,7 @@ async function main() {
     redact: { paths: ["*.apiKey", "*.token", "*.email", "*.password", "*.secret", "*.databaseUrl", "*.authorization"], censor: "[redacted]" },
   });
 
-  const database = createDatabase(config.databaseUrl);
+  const database = createDatabase(config.databaseUrl, { ca: config.databaseCa });
   if (database.kind === "pglite") {
     // PGlite is single-process and owned by the API in development.
     log.error({}, "The verification worker needs Postgres: set DATABASE_URL to a postgres:// URL");

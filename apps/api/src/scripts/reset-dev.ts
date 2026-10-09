@@ -1,8 +1,14 @@
 import { rmSync } from "node:fs";
-import { loadConfig } from "../config";
+import { ConfigError, loadConfig } from "../config";
 
 // Development-only: delete the local embedded database and dev outbox.
-const config = loadConfig();
+let config;
+try {
+  config = loadConfig();
+} catch (error) {
+  console.error(error instanceof ConfigError ? error.message : "Invalid configuration");
+  process.exit(1);
+}
 if (config.env === "production" || !config.databaseUrl.startsWith("pglite:") || config.databaseUrl === "pglite:memory") {
   console.error("db:reset only clears a local PGlite database directory in development.");
   process.exit(1);

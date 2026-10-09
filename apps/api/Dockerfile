@@ -20,5 +20,6 @@ COPY --from=build /repo/apps/api/drizzle apps/api/drizzle
 WORKDIR /repo/apps/api
 USER node
 EXPOSE 8787
+# A remote database needs its CA certificate at runtime: mount it and set VERITY_DB_CA_PATH.
 # Apply migrations first (or set MIGRATE_ON_START=true): node dist/migrate.js
 CMD ["node", "dist/server.js"]

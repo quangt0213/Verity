@@ -107,9 +107,17 @@ platform, with any managed Postgres.
 
 ```sh
 npm ci && npm run build -w @verity/api       # → apps/api/dist/{server,migrate}.js
-VERITY_DATABASE_ACK=<db host> node apps/api/dist/migrate.js   # apply migrations (or MIGRATE_ON_START=true)
+# apply migrations (or MIGRATE_ON_START=true); needs only DATABASE_URL, the CA and the acknowledgement
+VERITY_DATABASE_ACK=<db host> VERITY_DB_CA_PATH=<ca.pem> node apps/api/dist/migrate.js
 node apps/api/dist/server.js                 # cwd apps/api, so ./drizzle is found
 ```
+
+**Database TLS.** Every connection to a non-local database verifies the
+server's certificate chain and host name against the CA in `VERITY_DB_CA_PATH`
+(for Supabase, the project's `prod-ca-2021.crt`). This applies to the API, the
+worker and migrations in every `NODE_ENV`, and the URL's `sslmode` can't weaken
+it. A missing, unreadable or invalid CA file refuses to start before
+connecting. Local databases need no CA. See `apps/api/src/db/tls.ts`.
 
 **Remote-database acknowledgement.** Commands that write schema or process
 jobs refuse a non-local `DATABASE_URL` unless `VERITY_DATABASE_ACK` equals that
@@ -128,7 +136,8 @@ yet exercised in CI).
 | Variable | Value |
 | --- | --- |
 | `NODE_ENV` | `production` |
-| `DATABASE_URL` | Postgres URL (with `sslmode=require` for hosted Postgres) |
+| `DATABASE_URL` | Postgres URL (TLS is always on for a remote database; see above) |
+| `VERITY_DB_CA_PATH` | Path to the database's CA certificate (PEM); required for any non-local database |
 | `VERITY_DATABASE_ACK` | The host name of `DATABASE_URL` (not a secret): confirms the remote database on purpose |
 | `SESSION_SECRET` | 32+ random characters |
 | `VERITY_PUBLIC_URL` | The service's https URL |
@@ -154,8 +163,8 @@ node apps/api/dist/worker.js                 # cwd apps/api; same image as the A
 npm run dev:worker                           # development: a LOCAL postgres:// DATABASE_URL only
 ```
 
-Production runs need `NODE_ENV=production` and `VERITY_DATABASE_ACK=<db host>`
-(see above).
+Production runs need `NODE_ENV=production`, `VERITY_DATABASE_ACK=<db host>`
+and `VERITY_DB_CA_PATH` (see above).
 
 **Real-PostgreSQL tests** (worker concurrency, leases, fencing, atomic
 transitions, end-to-end flows with mocked providers): point
