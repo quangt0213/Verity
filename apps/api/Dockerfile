@@ -17,9 +17,24 @@ COPY apps/web/package.json apps/web/
 RUN npm ci --omit=dev --workspace @verity/api --ignore-scripts && npm cache clean --force
 COPY --from=build /repo/apps/api/dist apps/api/dist
 COPY --from=build /repo/apps/api/drizzle apps/api/drizzle
+
+# Public Supabase CA certificate for verified database TLS
+COPY apps/api/certs/prod-ca-2021.crt /repo/apps/api/certs/prod-ca-2021.crt
+ENV VERITY_DB_CA_PATH=/repo/apps/api/certs/prod-ca-2021.crt
+
 WORKDIR /repo/apps/api
 USER node
 EXPOSE 8787
-# A remote database needs its CA certificate at runtime: mount it and set VERITY_DB_CA_PATH.
-# Apply migrations first (or set MIGRATE_ON_START=true): node dist/migrate.js
+
+CMD ["node", "dist/server.js"]COPY --from=build /repo/apps/api/dist apps/api/dist
+COPY --from=build /repo/apps/api/drizzle apps/api/drizzle
+
+# Public Supabase CA certificate for verified database TLS
+COPY apps/api/certs/prod-ca-2021.crt /repo/apps/api/certs/prod-ca-2021.crt
+ENV VERITY_DB_CA_PATH=/repo/apps/api/certs/prod-ca-2021.crt
+
+WORKDIR /repo/apps/api
+USER node
+EXPOSE 8787
+
 CMD ["node", "dist/server.js"]
