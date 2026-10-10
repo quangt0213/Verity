@@ -119,6 +119,17 @@ worker and migrations in every `NODE_ENV`, and the URL's `sslmode` can't weaken
 it. A missing, unreadable or invalid CA file refuses to start before
 connecting. Local databases need no CA. See `apps/api/src/db/tls.ts`.
 
+**Sign-in email.** Production sends sign-in codes by SMTP (`SMTP_URL`, the
+default) or, on hosts that block outbound SMTP such as Railway's Hobby plan,
+through Resend's HTTPS API: set `AUTH_EMAIL_TRANSPORT=resend`,
+`RESEND_API_KEY` (a secret, in the host's environment only) and
+`AUTH_EMAIL_FROM`. Verify the sender's domain in Resend first (its SPF and
+DKIM records), and add DMARC. The service refuses to start with a missing or
+malformed key or sender. Each code is sent once with a 10-second timeout; a
+failure is logged as a short reason (HTTP status and Resend's error type, never
+the key, code or address), and the API's answer doesn't change, so the user
+just asks for a new code. See `apps/api/src/auth/mailer.ts`.
+
 **Remote-database acknowledgement.** Commands that write schema or process
 jobs refuse a non-local `DATABASE_URL` unless `VERITY_DATABASE_ACK` equals that
 database's host name (copying the host on purpose; a stale `.env` can't do it):
@@ -142,7 +153,8 @@ yet exercised in CI).
 | `SESSION_SECRET` | 32+ random characters |
 | `VERITY_PUBLIC_URL` | The service's https URL |
 | `VERITY_ALLOWED_ORIGINS` | Exact origins of the Verity clients (today: the Maypop app origin) |
-| `SMTP_URL` and `AUTH_EMAIL_FROM` | For sign-in codes |
+| `AUTH_EMAIL_FROM` | Sign-in code sender, e.g. `Verity <login@your-domain.example>` |
+| `SMTP_URL`, or `AUTH_EMAIL_TRANSPORT=resend` and `RESEND_API_KEY` | Sign-in code delivery (see below) |
 
 Set `TRUST_PROXY` when the service runs behind a load balancer. The service
 refuses to start if production settings are insecure.
@@ -219,7 +231,7 @@ local development → tests → commit → push to GitHub → Maypop imports and
   committed `apps/web/.env.production` containing only these public values.
   Without them, the app shows an honest "not connected" state, never demo data.
 - **Never** give a secret to the frontend build. Server secrets
-  (`DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `INTERNAL_API_TOKEN`,
+  (`DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `RESEND_API_KEY`, `INTERNAL_API_TOKEN`,
   `NIMBLE_API_KEY`) belong to the Verity service and worker only.
 
 **After the first Maypop build:**

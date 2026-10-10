@@ -19,7 +19,7 @@ cross-origin authentication analysis, and the known remaining risks.
 
 | Secret | Where it lives |
 | --- | --- |
-| `DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `INTERNAL_API_TOKEN` | `apps/api/.env` / service environment only |
+| `DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `RESEND_API_KEY`, `INTERNAL_API_TOKEN` | `apps/api/.env` / service environment only |
 | `NIMBLE_API_KEY` | The **verification worker's** environment only (Phase 3). The API never reads it. |
 | `RAWTREE_API_KEY`, `RAWTREE_DATABASE` | Reserved for a later phase; accepted but unused |
 
@@ -27,7 +27,8 @@ cross-origin authentication analysis, and the known remaining risks.
   `apps/web/.env.example`). Every other `.env*` file is git-ignored.
 - **The service refuses to start in production** with an embedded database, a
   short or default session secret, missing or wildcard or non-https origins, a
-  non-https public URL, or a non-SMTP email transport. Error messages name the
+  non-https public URL, an email transport other than SMTP or Resend, or a
+  missing or malformed Resend key or sender. Error messages name the
   variable, never its value (tested).
 - **Frontend guards:**
   1. The build refuses secret-like `VITE_*` names.
@@ -351,7 +352,10 @@ database failure returns a generic 500 (tested).
 - **Security events** are logged with outcome codes only: code requested or
   rejected, origin rejected, manual transition, report created.
 - **Development sign-in codes** go to files in `apps/api/.data/dev-outbox/`,
-  never to logs. Production sends them by SMTP.
+  never to logs. Production sends them by SMTP or Resend's HTTPS API. The
+  Resend key goes only to `https://api.resend.com/emails` (redirects are
+  refused), and a failed send logs a short reason without the key, code or
+  address (tested).
 
 ## Location privacy
 
@@ -405,8 +409,9 @@ database failure returns a generic 500 (tested).
    - run the flow end to end (browse, sign in, report, confirm, follow, reload).
 2. **Bearer token in `localStorage`** is exposed to any script that runs in
    the app's origin (see the trade-off above).
-3. **Email delivery and abuse.** Sign-in depends on an SMTP provider: set up
-   SPF, DKIM and DMARC for `AUTH_EMAIL_FROM`. Per-email and per-network limits
+3. **Email delivery and abuse.** Sign-in depends on an SMTP provider or Resend: set
+   up SPF, DKIM and DMARC for `AUTH_EMAIL_FROM` (with Resend, the domain must be
+   verified there). Per-email and per-network limits
    reduce code spam, but there is no CAPTCHA. Disposable addresses can create
    accounts, so one person can hold several accounts.
 4. **Moderation.** There are no moderator tools yet beyond operator
