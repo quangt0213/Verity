@@ -51,9 +51,10 @@ const envSchema = z.object({
   VERITY_PUBLIC_URL: z.string().optional(),
   VERITY_ALLOWED_ORIGINS: z.string().optional(),
   TRUST_PROXY: z.string().optional(),
-  AUTH_EMAIL_TRANSPORT: z.enum(["smtp", "dev-outbox", "memory"]).optional(),
+  AUTH_EMAIL_TRANSPORT: z.enum(["smtp", "resend", "dev-outbox", "memory"]).optional(),
   AUTH_EMAIL_FROM: z.string().optional(),
   SMTP_URL: z.string().optional(),
+  RESEND_API_KEY: z.string().optional(),
   DEV_OUTBOX_DIR: z.string().optional(),
   INTERNAL_API_TOKEN: z.string().optional(),
   // Read only by the verification worker (src/worker/config.ts), never by the
@@ -64,7 +65,7 @@ const envSchema = z.object({
   RAWTREE_DATABASE: z.string().optional(),
 });
 
-export type EmailTransport = "smtp" | "dev-outbox" | "memory";
+export type EmailTransport = "smtp" | "resend" | "dev-outbox" | "memory";
 
 export interface AppConfig {
   env: "development" | "test" | "production";
@@ -79,11 +80,21 @@ export interface AppConfig {
   publicUrl: string;
   allowedOrigins: string[];
   trustProxy: TrustProxy;
-  email: { transport: EmailTransport; from: string; smtpUrl?: string; outboxDir: string };
+  email: { transport: EmailTransport; from: string; smtpUrl?: string; resendApiKey?: string; outboxDir: string };
   internalApiToken: string | null;
 }
 
 export class ConfigError extends Error {}
+
+/** Shape of a Resend API key ("re_" prefix); a typo or placeholder fails at startup, not at the first sign-in. */
+const RESEND_API_KEY_SHAPE = /^re_[A-Za-z0-9_-]{16,256}$/;
+
+/** "Name <local@domain.tld>" or "local@domain.tld", as Resend's from field accepts. */
+export function isValidSender(value: string): boolean {
+  const match = /^(?:[^<>\r\n]+?\s*<([^<>\s]+)>|([^<>\s]+))$/.exec(value.trim());
+  const address = match?.[1] ?? match?.[2];
+  return !!address && /^[^\s@]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(address);
+}
 
 /** Empty variables (e.g. "PORT=" copied from .env.example) mean "not set". */
 export function presentEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -139,10 +150,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (production && allowedOrigins.length === 0) problems.push("VERITY_ALLOWED_ORIGINS is required in production");
 
   const transport: EmailTransport = e.AUTH_EMAIL_TRANSPORT ?? (production ? "smtp" : e.NODE_ENV === "test" ? "memory" : "dev-outbox");
-  if (production && transport !== "smtp") problems.push("AUTH_EMAIL_TRANSPORT must be smtp in production");
+  if (production && transport !== "smtp" && transport !== "resend") problems.push("AUTH_EMAIL_TRANSPORT must be smtp or resend in production");
   if (transport === "smtp" && !e.SMTP_URL) problems.push("SMTP_URL is required for the smtp email transport");
+  if (transport === "resend") {
+    if (!e.RESEND_API_KEY) problems.push("RESEND_API_KEY is required for the resend email transport");
+    else if (!RESEND_API_KEY_SHAPE.test(e.RESEND_API_KEY)) problems.push("RESEND_API_KEY is not a valid Resend API key");
+  }
   const from = e.AUTH_EMAIL_FROM || (production ? "" : "Verity <no-reply@verity.localhost>");
   if (!from) problems.push("AUTH_EMAIL_FROM is required in production");
+  else if (transport === "resend" && !isValidSender(from)) problems.push("AUTH_EMAIL_FROM must be an address or Name <address> for the resend email transport");
 
   const internalApiToken = e.INTERNAL_API_TOKEN || null;
   if (internalApiToken && internalApiToken.length < 32) problems.push("INTERNAL_API_TOKEN must be at least 32 characters");
@@ -160,7 +176,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     publicUrl,
     allowedOrigins,
     trustProxy: parseTrustProxy(e.TRUST_PROXY),
-    email: { transport, from, smtpUrl: e.SMTP_URL, outboxDir: e.DEV_OUTBOX_DIR || ".data/dev-outbox" },
+    email: { transport, from, smtpUrl: e.SMTP_URL, resendApiKey: e.RESEND_API_KEY, outboxDir: e.DEV_OUTBOX_DIR || ".data/dev-outbox" },
     internalApiToken,
   };
 }

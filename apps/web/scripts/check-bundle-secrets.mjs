@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 export const SECRET_NAMES = [
   "NIMBLE_API_KEY",
   "RAWTREE_API_KEY",
+  "RESEND_API_KEY",
   "SESSION_SECRET",
   "DATABASE_URL",
   "INTERNAL_JOB_SECRET",

@@ -40,6 +40,55 @@ describe("configuration", () => {
     expect(() => loadConfig({ ...goodProduction, ...override })).toThrow(ConfigError);
   });
 
+  describe("resend email transport", () => {
+    const resendProduction = {
+      ...goodProduction,
+      SMTP_URL: "",
+      AUTH_EMAIL_TRANSPORT: "resend",
+      RESEND_API_KEY: `re_test_${"k".repeat(24)}`,
+      AUTH_EMAIL_FROM: "Verity <login@veritylive.app>",
+    };
+
+    it("accepts a complete production configuration without SMTP", () => {
+      const config = loadConfig(resendProduction);
+      expect(config.email).toMatchObject({ transport: "resend", from: "Verity <login@veritylive.app>", resendApiKey: resendProduction.RESEND_API_KEY });
+    });
+
+    it("keeps smtp as the production default", () => {
+      expect(loadConfig({ ...goodProduction, RESEND_API_KEY: resendProduction.RESEND_API_KEY }).email.transport).toBe("smtp");
+    });
+
+    it.each([
+      ["a missing key", { RESEND_API_KEY: "" }, "RESEND_API_KEY is required"],
+      ["a placeholder key", { RESEND_API_KEY: "re_123456789" }, "RESEND_API_KEY is not a valid Resend API key"],
+      ["a key from another provider", { RESEND_API_KEY: `sk_live_${"k".repeat(24)}` }, "RESEND_API_KEY is not a valid Resend API key"],
+      ["a key with stray whitespace", { RESEND_API_KEY: `re_test_${"k".repeat(24)}\n` }, "RESEND_API_KEY is not a valid Resend API key"],
+      ["a missing sender", { AUTH_EMAIL_FROM: "" }, "AUTH_EMAIL_FROM is required"],
+      ["a sender without an address", { AUTH_EMAIL_FROM: "Verity" }, "AUTH_EMAIL_FROM must be an address"],
+      ["a sender with a broken address", { AUTH_EMAIL_FROM: "Verity <login@veritylive>" }, "AUTH_EMAIL_FROM must be an address"],
+    ])("refuses %s", (_label, override, problem) => {
+      expect(() => loadConfig({ ...resendProduction, ...override })).toThrow(problem);
+    });
+
+    it("requires a valid key outside production too", () => {
+      expect(() => loadConfig({ NODE_ENV: "development", AUTH_EMAIL_TRANSPORT: "resend" })).toThrow("RESEND_API_KEY is required");
+    });
+
+    it("does not echo the key in errors", () => {
+      const almostKey = "re_secret value with spaces";
+      expect(() => loadConfig({ ...resendProduction, RESEND_API_KEY: almostKey })).toThrow(ConfigError);
+      try {
+        loadConfig({ ...resendProduction, RESEND_API_KEY: almostKey });
+      } catch (error) {
+        expect(String(error)).not.toContain(almostKey);
+      }
+    });
+
+    it.each(["Verity <login@veritylive.app>", "login@veritylive.app", "Verity Live <login@mail.veritylive.app>"])("accepts the sender %s", (from) => {
+      expect(loadConfig({ ...resendProduction, AUTH_EMAIL_FROM: from }).email.from).toBe(from);
+    });
+  });
+
   it("does not echo secret values in errors", () => {
     try {
       loadConfig({ ...goodProduction, SESSION_SECRET: "tiny-secret-value" });
