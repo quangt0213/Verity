@@ -208,7 +208,12 @@ subject to CSP. The bundle secret scan passes.
 ## Requests to lead
 
 1. **MapShell context memo**
-   (`C:\Users\quang\verity-worktrees\requests\map-perf-mapshell-1.patch`).
+   (`C:\Users\quang\verity-worktrees\requests\map-perf-mapshell-1-integration.patch`).
+   - Written against the integrated MapShell on `team/integration`; it applies
+     cleanly with `patch -p1`. The older `map-perf-mapshell-1.patch` targets
+     `cc44449`.
+   - Depends on this branch's `shell-context.ts`, where `list.isFetching` is
+     optional.
    - What: build `ShellContext` with `useMemo`, and stop passing
      `list.isFetching`. No outlet reads it, and every fetch start re-rendered
      the whole feed.
@@ -230,6 +235,16 @@ subject to CSP. The bundle secret scan passes.
    pans fetch nothing. It risks hiding events that are in view when the
    500-event cap truncates the response, so it needs a decision before anyone
    builds it.
+
+## Compatibility with integrated layout work
+
+- The AttributionControl stays at `"bottom-right"`, so the layout CSS that lifts
+  `.maplibregl-ctrl-bottom-right` above the sheet (`[data-sheet-inset]`,
+  `--sheet-inset`) still applies. No request to move it.
+- `data-visible-markers` on `[data-map-status]` is set in every build (the
+  diagnostic isn't gated), so `e2e/layout-overlays.spec.ts` keeps working. Event
+  markers now reserve label space but still always draw (`icon-allow-overlap`),
+  so tapping a marker works as before.
 
 ## Remaining risks
 
