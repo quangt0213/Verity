@@ -31,6 +31,12 @@ describe("resolveConfig", () => {
     expect(resolveConfig({ VITE_VERITY_API_URL: "http://api.verity.example" }, false).dataSource.kind).toBe("unconfigured");
   });
 
+  it("enables the basemap detail layer unless turned off, with the flat camera", () => {
+    expect(resolveConfig({}, true).map.detail).toBe(true);
+    expect(resolveConfig({ VITE_MAP_DETAIL: "off" }, true).map.detail).toBe(false);
+    expect(resolveConfig({}, true).map.camera).toEqual({ pitch: 0, bearing: 0, allowRotateAndPitch: false, buildings3d: false });
+  });
+
   it("falls back to default map styles for invalid URLs", () => {
     expect(resolveConfig({ VITE_MAP_STYLE_URL_LIGHT: "javascript:alert(1)" }, true).map.styleLight).toBe(DEFAULT_MAP_STYLE_LIGHT);
   });

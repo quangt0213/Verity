@@ -7,12 +7,18 @@ import { Icon } from "../../components/ui/Icon";
 import { useToast } from "../../components/ui/Toast";
 import { approximateCoordinates } from "../../lib/geo";
 import { locateOnce } from "../../lib/hooks";
+import { useTheme } from "../../theme/ThemeProvider";
+import { setBasemap } from "../map/basemap-detail";
+import type { MapTheme } from "../map/map-layers";
 import { OSM_ATTRIBUTION, webglSupported } from "../map/maplibre-setup";
+import { resolveVerityImage } from "../map/marker-images";
 
 interface LocationPickerProps {
   value: Coordinates;
   onChange: (value: Coordinates) => void;
   styleUrl: string;
+  /** Basemap theme; defaults to the app's resolved theme. */
+  theme?: MapTheme;
   error?: string;
 }
 
@@ -21,7 +27,9 @@ interface LocationPickerProps {
  * rounded to ~11 m before they're stored in the form. A manual-entry fallback
  * keeps this usable without the map (keyboard users, map failures).
  */
-export function LocationPicker({ value, onChange, styleUrl, error }: LocationPickerProps) {
+export function LocationPicker({ value, onChange, styleUrl, theme: themeProp, error }: LocationPickerProps) {
+  const { resolved } = useTheme();
+  const theme = themeProp ?? resolved;
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const emitChange = useEffectEvent((c: Coordinates) => onChange(c));
@@ -32,17 +40,18 @@ export function LocationPicker({ value, onChange, styleUrl, error }: LocationPic
   const [locating, setLocating] = useState(false);
   const toast = useToast();
   const id = useId();
-  const appliedStyle = useRef(styleUrl);
+  const appliedStyle = useRef(`${styleUrl}|${theme}`);
+  const initialStyle = useEffectEvent(() => ({ styleUrl, theme }));
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !webgl) return;
     const center = initialCenter();
+    const start = initialStyle();
     let map: MapLibreMap;
     try {
       map = new MapLibreMap({
         container,
-        style: appliedStyle.current,
         center: [center.longitude, center.latitude],
         zoom: 15,
         attributionControl: false,
@@ -56,6 +65,8 @@ export function LocationPicker({ value, onChange, styleUrl, error }: LocationPic
       return;
     }
     mapRef.current = map;
+    map.setMissingStyleImageResolver((id) => resolveVerityImage(map, id));
+    setBasemap(map, start.styleUrl, start.theme);
     map.touchZoomRotate.disableRotation();
     map.addControl(new AttributionControl({ compact: true, customAttribution: OSM_ATTRIBUTION }), "bottom-right");
     map.getCanvas().setAttribute("aria-label", "Map for choosing the report location");
@@ -81,10 +92,11 @@ export function LocationPicker({ value, onChange, styleUrl, error }: LocationPic
 
   // Later style changes (theme switches) reload the basemap.
   useEffect(() => {
-    if (!mapRef.current || appliedStyle.current === styleUrl) return;
-    appliedStyle.current = styleUrl;
-    mapRef.current.setStyle(styleUrl, { diff: false });
-  }, [styleUrl]);
+    const key = `${styleUrl}|${theme}`;
+    if (!mapRef.current || appliedStyle.current === key) return;
+    appliedStyle.current = key;
+    setBasemap(mapRef.current, styleUrl, theme);
+  }, [styleUrl, theme]);
 
   const moveTo = (c: Coordinates) => {
     if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) return;

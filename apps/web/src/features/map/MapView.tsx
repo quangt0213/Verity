@@ -6,16 +6,21 @@ import {
   NavigationControl,
   type GeoJSONSource,
   type MapLayerMouseEvent,
+  type MapOptions,
 } from "maplibre-gl";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { memo, useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
+import { appConfig } from "../../config/env";
 import { Icon } from "../../components/ui/Icon";
 import { debounce } from "../../lib/debounce";
 import { viewportToBBox } from "../../lib/geo";
+import { setBasemap } from "./basemap-detail";
+import { moveCamera } from "./camera";
 import {
   EVENTS_SOURCE,
   eventLayers,
   eventsSource,
+  eventsSignature,
   eventsToGeoJSON,
   haloFilter,
   LAYER_CLUSTERS,
@@ -27,7 +32,7 @@ import {
   type MapTheme,
 } from "./map-layers";
 import { OSM_ATTRIBUTION, webglSupported } from "./maplibre-setup";
-import { createClusterImage, createMarkerImage, parseImageId } from "./marker-images";
+import { resolveVerityImage } from "./marker-images";
 
 export type MapStatus = "loading" | "ready" | "failed";
 
@@ -69,9 +74,12 @@ function userGeoJSON(location: Coordinates | null | undefined): GeoJSON.FeatureC
   };
 }
 
-const pixelRatio = () => Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+/** Measurement builds only: settings the e2e/perf harness may override. */
+type PerfOverrides = Partial<MapOptions> & { style?: string; detail?: boolean };
+const perfOverrides = (): PerfOverrides | undefined =>
+  import.meta.env.MODE === "perf" ? (window as { __verityMapOptions?: PerfOverrides }).__verityMapOptions : undefined;
 
-export function MapView({
+function MapViewImpl({
   events,
   selectedId,
   onSelectEvent,
@@ -89,6 +97,7 @@ export function MapView({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const appliedStyle = useRef<string | null>(null);
+  const appliedEvents = useRef<string | null>(null);
   const [webgl] = useState(webglSupported);
   const [status, setStatus] = useState<MapStatus>(webgl ? "loading" : "failed");
   const [attempt, setAttempt] = useState(0);
@@ -103,7 +112,10 @@ export function MapView({
   const reportViewport = useEffectEvent((viewport: Viewport) => onViewportChange?.(viewport));
   const initialStyle = useEffectEvent(() => ({ styleUrl, theme, initialView, ariaLabel }));
   const installLayers = useEffectEvent((map: MapLibreMap) => {
-    if (!map.getSource(EVENTS_SOURCE)) map.addSource(EVENTS_SOURCE, eventsSource(eventsToGeoJSON(events)));
+    if (!map.getSource(EVENTS_SOURCE)) {
+      map.addSource(EVENTS_SOURCE, eventsSource(eventsToGeoJSON(events)));
+      appliedEvents.current = eventsSignature(events);
+    }
     if (!map.getSource(USER_SOURCE)) map.addSource(USER_SOURCE, { type: "geojson", data: userGeoJSON(userLocation) });
     for (const layer of eventLayers(theme, selectedId)) {
       if (!map.getLayer(layer.id)) map.addLayer(layer);
@@ -111,11 +123,11 @@ export function MapView({
     if (!map.getLayer(LAYER_USER)) map.addLayer(userLocationLayer(theme));
   });
   const flyTo = useEffectEvent((map: MapLibreMap, target: FlyTarget) => {
-    map.easeTo({
-      center: [target.coordinates.longitude, target.coordinates.latitude],
-      zoom: Math.max(map.getZoom(), target.zoom ?? 14),
-      padding: { top: 40, bottom: bottomInset + 40, left: 40, right: 40 },
-      duration: 700,
+    moveCamera(map, [target.coordinates.longitude, target.coordinates.latitude], Math.max(map.getZoom(), target.zoom ?? 14), {
+      top: 40,
+      bottom: bottomInset + 40,
+      left: 40,
+      right: 40,
     });
   });
 
@@ -124,20 +136,27 @@ export function MapView({
     const container = containerRef.current;
     if (!container || !webgl) return;
     const start = initialStyle();
+    const { style: perfStyle, detail = appConfig.map.detail, ...perfOptions } = perfOverrides() ?? {};
+    const camera = appConfig.map.camera;
 
     let map: MapLibreMap;
     try {
+      // The style is set right after construction so it can be transformed.
       map = new MapLibreMap({
         container,
-        style: start.styleUrl,
         center: [start.initialView.center.longitude, start.initialView.center.latitude],
         zoom: start.initialView.zoom,
+        pitch: camera.pitch,
+        bearing: camera.bearing,
         minZoom: 3,
         maxZoom: 18,
+        // Flat 2D until a 3D mode enables it (config/defaults.ts DEFAULT_CAMERA).
+        maxPitch: camera.allowRotateAndPitch ? 60 : 0,
         attributionControl: false,
-        dragRotate: false,
-        pitchWithRotate: false,
-        touchPitch: false,
+        dragRotate: camera.allowRotateAndPitch,
+        pitchWithRotate: camera.allowRotateAndPitch,
+        touchPitch: camera.allowRotateAndPitch,
+        ...perfOptions,
       });
     } catch {
       // MapLibre throws synchronously only when it can't create a WebGL context.
@@ -146,26 +165,22 @@ export function MapView({
       return;
     }
     mapRef.current = map;
+    // Measurement builds (`vite build --mode perf`, e2e/perf) expose the map to
+    // the harness. MODE is a build-time constant, so other builds drop this.
+    if (import.meta.env.MODE === "perf") Object.assign(window, { __verityMap: map });
+    setBasemap(map, perfStyle ?? start.styleUrl, start.theme, detail);
     appliedStyle.current = `${start.styleUrl}|${start.theme}`;
-    map.touchZoomRotate.disableRotation();
-    map.keyboard.disableRotation();
+    if (!camera.allowRotateAndPitch) {
+      map.touchZoomRotate.disableRotation();
+      map.keyboard.disableRotation();
+    }
     map.addControl(new AttributionControl({ compact: true, customAttribution: OSM_ATTRIBUTION }), "bottom-right");
     map.addControl(new NavigationControl({ showCompass: false }), "top-right");
     map.getCanvas().setAttribute("aria-label", start.ariaLabel);
 
-    // Marker and cluster images are drawn on demand, so the map never depends
-    // on the tile provider's sprites or fonts.
-    map.setMissingStyleImageResolver((id) => {
-      if (map.hasImage(id)) return;
-      const parsed = parseImageId(id);
-      if (!parsed) return;
-      const pr = pixelRatio();
-      const image =
-        parsed.kind === "marker"
-          ? createMarkerImage(parsed.group, parsed.category, parsed.theme, pr)
-          : createClusterImage(parsed.urgent, parsed.label, parsed.theme, pr);
-      if (image) map.addImage(id, image, { pixelRatio: pr });
-    });
+    // Marker, cluster and place-of-interest images are drawn on demand, so
+    // the map never depends on the tile provider's sprites.
+    map.setMissingStyleImageResolver((id) => resolveVerityImage(map, id));
 
     const emitViewport = () => {
       const b = map.getBounds();
@@ -240,9 +255,15 @@ export function MapView({
     };
   }, [attempt, webgl]);
 
-  // Event data.
+  // Event data. Pans often return the same events as a new array; skipping
+  // those avoids re-clustering in the worker and a marker fade-in.
   useEffect(() => {
-    mapRef.current?.getSource<GeoJSONSource>(EVENTS_SOURCE)?.setData(eventsToGeoJSON(events));
+    const source = mapRef.current?.getSource<GeoJSONSource>(EVENTS_SOURCE);
+    if (!source) return;
+    const signature = eventsSignature(events);
+    if (signature === appliedEvents.current) return;
+    appliedEvents.current = signature;
+    source.setData(eventsToGeoJSON(events));
   }, [events]);
 
   // Selection halo.
@@ -263,7 +284,7 @@ export function MapView({
     const key = `${styleUrl}|${theme}`;
     if (!map || appliedStyle.current === key) return;
     appliedStyle.current = key;
-    map.setStyle(styleUrl, { diff: false });
+    setBasemap(map, styleUrl, theme);
   }, [styleUrl, theme]);
 
   // Programmatic camera moves (list selection, "near me").
@@ -304,3 +325,15 @@ export function MapView({
     </div>
   );
 }
+
+/**
+ * MapShell re-renders often (clock ticks, sheet drags, list hover). The map
+ * only needs to re-render when one of its inputs changes; `initialView` is
+ * read once at creation, so a fresh object for it doesn't count.
+ */
+export const MapView = memo(MapViewImpl, (prev, next) => {
+  for (const key of Object.keys({ ...prev, ...next }) as Array<keyof MapViewProps>) {
+    if (key !== "initialView" && !Object.is(prev[key], next[key])) return false;
+  }
+  return true;
+});

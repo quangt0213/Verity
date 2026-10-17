@@ -1,4 +1,4 @@
-import { DEFAULT_CENTER, DEFAULT_MAP_STYLE_DARK, DEFAULT_MAP_STYLE_LIGHT, DEFAULT_ZOOM } from "./defaults";
+import { DEFAULT_CAMERA, DEFAULT_CENTER, DEFAULT_MAP_STYLE_DARK, DEFAULT_MAP_STYLE_LIGHT, DEFAULT_ZOOM, type MapCameraConfig } from "./defaults";
 
 /**
  * Public runtime configuration. Every value here is compiled into the bundle
@@ -12,7 +12,13 @@ export type DataSourceConfig =
 
 export interface AppConfig {
   dataSource: DataSourceConfig;
-  map: { styleLight: string; styleDark: string };
+  map: {
+    styleLight: string;
+    styleDark: string;
+    /** Verity's detail layer (parks, buildings, places of interest) on OpenMapTiles-schema styles. */
+    detail: boolean;
+    camera: MapCameraConfig;
+  };
   defaultView: { center: { latitude: number; longitude: number }; zoom: number };
 }
 
@@ -22,6 +28,7 @@ export interface RawPublicEnv {
   VITE_MOCK_WRITES?: string;
   VITE_MAP_STYLE_URL_LIGHT?: string;
   VITE_MAP_STYLE_URL_DARK?: string;
+  VITE_MAP_DETAIL?: string;
   VITE_DEFAULT_CENTER?: string;
   VITE_DEFAULT_ZOOM?: string;
 }
@@ -99,6 +106,8 @@ export function resolveConfig(env: RawPublicEnv, isDev: boolean, allowInsecureLo
     map: {
       styleLight: parseStyleUrl(env.VITE_MAP_STYLE_URL_LIGHT, DEFAULT_MAP_STYLE_LIGHT),
       styleDark: parseStyleUrl(env.VITE_MAP_STYLE_URL_DARK, DEFAULT_MAP_STYLE_DARK),
+      detail: env.VITE_MAP_DETAIL?.trim().toLowerCase() !== "off",
+      camera: DEFAULT_CAMERA,
     },
     defaultView: { center: parseCenter(env.VITE_DEFAULT_CENTER), zoom: parseZoom(env.VITE_DEFAULT_ZOOM) },
   };
