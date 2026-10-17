@@ -67,7 +67,8 @@ Option 1 is the only one that makes the paid run useful without weakening the de
 - `5628f41` Verification relevance: event identity, named-event queries, location matching
 - `a5e53aa` Reported schedules for planned events (claims, not the event's schedule)
 - `62f47b6` Aging sweep: visit every event with a round-robin cursor
-- (this commit) Decision-rule edge-case tests; handoff
+- `7df1c8a` Decision-rule edge-case tests, name-aware excerpts, handoff
+- (next) Handoff commit list
 
 ## Tests actually run (2026-10-17)
 
