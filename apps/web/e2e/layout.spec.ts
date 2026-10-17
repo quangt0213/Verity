@@ -166,6 +166,80 @@ test("the document doesn't scroll on the mobile map either", async ({ page, isMo
   expect(m.appOverflowX).toBeLessThanOrEqual(1);
 });
 
+test.describe("mobile bottom sheet", () => {
+  test.skip(({ isMobile }) => !isMobile, "mobile layout");
+
+  /** Bottom edge of the sheet's last header control (the "Show ended" toggle) vs the sheet's own bottom. */
+  const peekGeometry = (page: Page) =>
+    page.getByRole("region", { name: "Events in this area" }).evaluate((sheet) => {
+      const controls = [...sheet.querySelectorAll("[role=group] button, [role=group] label")];
+      const last = controls[controls.length - 1]!.getBoundingClientRect();
+      return { controlBottom: Math.round(last.bottom), sheetBottom: Math.round(sheet.getBoundingClientRect().bottom), innerHeight: window.innerHeight };
+    });
+
+  test("the peeking sheet keeps its whole header visible when the text is larger", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 700 });
+    await page.goto("/#/map");
+    // Larger text wraps the filter chips onto more lines than the fixed peek height had room for.
+    await page.addStyleTag({ content: "html { font-size: 20px }" });
+    await expect(page.getByRole("region", { name: "Events in this area" })).toHaveAttribute("data-snap", "peek");
+    await expect.poll(async () => (await peekGeometry(page)).controlBottom <= (await peekGeometry(page)).sheetBottom).toBe(true);
+  });
+
+  test("sheet controls stay clear of the bottom safe area (home indicator)", async ({ page, context }) => {
+    const cdp = await context.newCDPSession(page);
+    const inset = 34;
+    try {
+      await cdp.send("Emulation.setSafeAreaInsetsOverride" as never, { insets: { top: 47, bottom: inset, left: 0, right: 0 } } as never);
+    } catch {
+      test.skip(true, "this browser can't emulate safe-area insets");
+    }
+    await page.goto("/#/map");
+    const sheet = page.getByRole("region", { name: "Events in this area" });
+    await expect(sheet).toHaveCSS("padding-bottom", `${inset}px`);
+    const g = await peekGeometry(page);
+    expect(g.controlBottom).toBeLessThanOrEqual(g.innerHeight - inset);
+    // The Report button sits above the (taller) sheet.
+    const fab = await page.getByRole("link", { name: "Report an event" }).boundingBox();
+    const sheetBox = await sheet.boundingBox();
+    expect(fab!.y + fab!.height).toBeLessThanOrEqual(sheetBox!.y);
+  });
+
+  test("the handle stays a keyboard-operable button through every size", async ({ page }) => {
+    await page.goto("/#/map");
+    const sheet = page.getByRole("region", { name: "Events in this area" });
+    const handle = sheet.getByRole("button", { name: "Expand event list" });
+    await expect(handle).toHaveAttribute("aria-expanded", "false");
+    await handle.focus();
+    await page.keyboard.press("Enter");
+    await expect(sheet).toHaveAttribute("data-snap", "half");
+    await expect(handle).toHaveAttribute("aria-expanded", "true");
+    await page.keyboard.press("Enter");
+    await expect(sheet).toHaveAttribute("data-snap", "full");
+    await expect(sheet.getByRole("button", { name: "Collapse event list" })).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(sheet).toHaveAttribute("data-snap", "peek");
+  });
+
+  test("dragging the handle snaps the sheet to the nearest size", async ({ page }) => {
+    await page.goto("/#/map");
+    const sheet = page.getByRole("region", { name: "Events in this area" });
+    const handle = sheet.getByRole("button", { name: "Expand event list" });
+    const box = (await handle.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const viewport = page.viewportSize()!;
+    // Drag up to about the middle of the screen, in small steps like a finger.
+    const target = viewport.height * 0.5;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, target, { steps: 15 });
+    await page.mouse.up();
+    await expect(sheet).toHaveAttribute("data-snap", "half");
+    await expect.poll(async () => Math.round((await sheet.boundingBox())!.height)).toBeGreaterThan(viewport.height * 0.4);
+  });
+});
+
 test("the welcome page scrolls inside its own region on a short screen", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 480 });
   await page.goto("/#/welcome");

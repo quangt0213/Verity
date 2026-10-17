@@ -152,3 +152,20 @@
 [data-theme="dark"] .maplibregl-ctrl-attrib-button {
   filter: invert(1);
 }
+
+/*
+ * Mobile: the bottom sheet covers the bottom of the map, so MapShell marks the
+ * map area with data-sheet-inset and --sheet-inset (the sheet's height). Lift
+ * the bottom controls (the required attribution) above the sheet, on the left,
+ * clear of the Report button on the right.
+ */
+[data-sheet-inset] .maplibregl-ctrl-bottom-right {
+  right: auto;
+  left: 0;
+  bottom: var(--sheet-inset, 0px);
+  transition: bottom 200ms ease-out;
+}
+[data-sheet-inset] .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib {
+  /* Leave room for the Report button on the right (with the compact toggle and margins). */
+  max-width: calc(100vw - 190px);
+}
