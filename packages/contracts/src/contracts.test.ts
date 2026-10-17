@@ -89,6 +89,32 @@ describe("reportEventInputSchema", () => {
     });
     expect(parsed.title).toBe("Crashon Main St");
   });
+
+  describe("reported schedule (planned events only)", () => {
+    const hours = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
+    const festival = { ...validReport, category: "festival" as const, title: "Día San José 2026" };
+    const issues = (input: unknown) => {
+      const r = reportEventInputSchema.safeParse(input);
+      return r.success ? {} : Object.fromEntries(r.error.issues.map((i) => [i.path.join("."), i.message]));
+    };
+
+    it("accepts a start, or a start and end, for planned categories", () => {
+      expect(reportEventInputSchema.safeParse({ ...festival, scheduled_start_at: hours(24) }).success).toBe(true);
+      expect(reportEventInputSchema.safeParse({ ...festival, scheduled_start_at: hours(-2), scheduled_end_at: hours(6) }).success).toBe(true);
+      expect(reportEventInputSchema.safeParse(festival).success).toBe(true);
+    });
+
+    it("rejects schedules on disruptions, ends without starts, reversed or out-of-range times", () => {
+      expect(issues({ ...validReport, scheduled_start_at: hours(1) })).toEqual({ scheduled_start_at: "Only for planned events" });
+      expect(issues({ ...validReport, scheduled_end_at: hours(1) })).toEqual({ scheduled_end_at: "Only for planned events" });
+      expect(issues({ ...festival, scheduled_end_at: hours(1) })).toEqual({ scheduled_start_at: "Add a start time first" });
+      expect(issues({ ...festival, scheduled_start_at: hours(5), scheduled_end_at: hours(1) })).toEqual({ scheduled_end_at: "Must be after the start" });
+      expect(issues({ ...festival, scheduled_start_at: hours(-24 * (LIMITS.scheduleMaxPastDays + 1)) })).toHaveProperty("scheduled_start_at");
+      expect(issues({ ...festival, scheduled_start_at: hours(24 * (LIMITS.scheduleMaxAheadDays + 1)) })).toHaveProperty("scheduled_start_at");
+      expect(issues({ ...festival, scheduled_start_at: hours(1), scheduled_end_at: hours(24 * (LIMITS.scheduleMaxDurationDays + 2)) })).toHaveProperty("scheduled_end_at");
+      expect(issues({ ...festival, scheduled_start_at: "2026-03-19T10:00" })).toHaveProperty("scheduled_start_at"); // an offset is required
+    });
+  });
 });
 
 describe("checkPublicHttpUrl (SSRF first gate)", () => {

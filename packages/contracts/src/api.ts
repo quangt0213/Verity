@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EVENT_CATEGORIES, eventCategorySchema } from "./category";
+import { CATEGORY_KIND, EVENT_CATEGORIES, eventCategorySchema } from "./category";
 import { STILL_HAPPENING_ANSWERS } from "./community";
 import { eventSummarySchema } from "./event";
 import { evidenceSchema } from "./evidence";
@@ -46,7 +46,8 @@ export const timelineResponseSchema = z.object({ timeline: z.array(timelineEntry
 // POST /api/v1/reports
 // ---------------------------------------------------------------------------
 
-const MAX_OBSERVED_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_OBSERVED_AGE_MS = 7 * DAY_MS;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 export const reportEventInputSchema = z.strictObject({
@@ -63,6 +64,27 @@ export const reportEventInputSchema = z.strictObject({
     .refine((v) => Date.parse(v) <= Date.now() + MAX_CLOCK_SKEW_MS, { message: "Can't be in the future" })
     .refine((v) => Date.parse(v) >= Date.now() - MAX_OBSERVED_AGE_MS, { message: "Must be within the last 7 days" })
     .optional(),
+  /**
+   * Planned categories only: when the reporter says it is scheduled. A CLAIM
+   * stored on the report, never the event's established schedule: it helps
+   * Verity search for and recognize the event, and never changes its status.
+   */
+  scheduled_start_at: isoDateTime.optional(),
+  scheduled_end_at: isoDateTime.optional(),
+}).superRefine((report, ctx) => {
+  const start = report.scheduled_start_at ? Date.parse(report.scheduled_start_at) : null;
+  const end = report.scheduled_end_at ? Date.parse(report.scheduled_end_at) : null;
+  if (start === null && end === null) return;
+  const issue = (path: "scheduled_start_at" | "scheduled_end_at", message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+  if (CATEGORY_KIND[report.category] !== "planned") {
+    issue(start !== null ? "scheduled_start_at" : "scheduled_end_at", "Only for planned events");
+    return;
+  }
+  if (start === null) return issue("scheduled_start_at", "Add a start time first");
+  if (start < Date.now() - LIMITS.scheduleMaxPastDays * DAY_MS) issue("scheduled_start_at", `Must be within the last ${LIMITS.scheduleMaxPastDays} days`);
+  if (start > Date.now() + LIMITS.scheduleMaxAheadDays * DAY_MS) issue("scheduled_start_at", `Must be within the next ${LIMITS.scheduleMaxAheadDays} days`);
+  if (end !== null && end < start) issue("scheduled_end_at", "Must be after the start");
+  if (end !== null && end - start > LIMITS.scheduleMaxDurationDays * DAY_MS) issue("scheduled_end_at", `Must be within ${LIMITS.scheduleMaxDurationDays} days of the start`);
 });
 export type ReportEventInput = z.input<typeof reportEventInputSchema>;
 export type ReportEventPayload = z.output<typeof reportEventInputSchema>;

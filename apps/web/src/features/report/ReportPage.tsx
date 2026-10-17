@@ -1,4 +1,5 @@
 import {
+  CATEGORY_KIND,
   checkPublicHttpUrl,
   EVENT_CATEGORIES,
   LIMITS,
@@ -22,7 +23,16 @@ import { useTheme } from "../../theme/ThemeProvider";
 import { useAuth, useGuardedWrite } from "../auth/AuthProvider";
 import { LocationPicker } from "./LocationPicker";
 
-type FieldErrors = Partial<Record<"category" | "title" | "description" | "location" | "source_url" | "form", string>>;
+type FieldErrors = Partial<
+  Record<"category" | "title" | "description" | "location" | "source_url" | "scheduled_start_at" | "scheduled_end_at" | "form", string>
+>;
+
+/** A `datetime-local` value is the reporter's local wall-clock time; send it as an exact instant. */
+function localToIso(value: string): string | undefined {
+  if (!value) return undefined;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? value : at.toISOString();
+}
 
 const inputClass =
   "mt-1 w-full rounded-xl bg-surface px-3 text-sm ring-1 ring-line placeholder:text-muted focus:ring-2 focus:ring-accent focus:outline-none aria-invalid:ring-red-500";
@@ -49,6 +59,8 @@ export function ReportPage() {
   const [description, setDescription] = useState("");
   const [label, setLabel] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
   const [coordinates, setCoordinates] = useState<Coordinates>(approximateCoordinates(startCenter));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
@@ -57,14 +69,21 @@ export function ReportPage() {
   const { session } = useAuth();
   const guarded = useGuardedWrite();
 
+  // Only planned events have a schedule; the fields keep their values if the category changes back.
+  const planned = category !== null && CATEGORY_KIND[category] === "planned";
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    const scheduledStart = planned ? localToIso(startsAt) : undefined;
+    const scheduledEnd = planned ? localToIso(endsAt) : undefined;
     const payload = {
       category: category ?? undefined,
       title,
       ...(description.trim() ? { description } : {}),
       location: { coordinates: approximateCoordinates(coordinates), ...(label.trim() ? { label } : {}) },
       ...(sourceUrl.trim() ? { source_url: sourceUrl.trim() } : {}),
+      ...(scheduledStart ? { scheduled_start_at: scheduledStart } : {}),
+      ...(scheduledEnd ? { scheduled_end_at: scheduledEnd } : {}),
     };
 
     // Same schema the service uses; the service re-validates everything.
@@ -208,6 +227,52 @@ export function ReportPage() {
             </div>
           </div>
         </Card>
+
+        {planned && (
+          <Card>
+            <fieldset aria-describedby="schedule-help">
+              <legend className="text-sm font-semibold">
+                When is it scheduled? <span className="font-normal text-muted">(optional)</span>
+              </legend>
+              <p id="schedule-help" className="mt-1 text-xs text-muted">
+                If you know the schedule, Verity uses it to find this event. A schedule shows it's planned, not that it's happening.
+              </p>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="report-starts" className="text-sm font-medium">
+                    Starts
+                  </label>
+                  <input
+                    id="report-starts"
+                    type="datetime-local"
+                    value={startsAt}
+                    onChange={(e) => setStartsAt(e.target.value)}
+                    aria-invalid={Boolean(errors.scheduled_start_at)}
+                    aria-describedby={errors.scheduled_start_at ? "starts-error" : undefined}
+                    className={cn(inputClass, "h-11")}
+                  />
+                  <FieldError id="starts-error" message={errors.scheduled_start_at} />
+                </div>
+                <div>
+                  <label htmlFor="report-ends" className="text-sm font-medium">
+                    Ends
+                  </label>
+                  <input
+                    id="report-ends"
+                    type="datetime-local"
+                    value={endsAt}
+                    min={startsAt || undefined}
+                    onChange={(e) => setEndsAt(e.target.value)}
+                    aria-invalid={Boolean(errors.scheduled_end_at)}
+                    aria-describedby={errors.scheduled_end_at ? "ends-error" : undefined}
+                    className={cn(inputClass, "h-11")}
+                  />
+                  <FieldError id="ends-error" message={errors.scheduled_end_at} />
+                </div>
+              </div>
+            </fieldset>
+          </Card>
+        )}
 
         <Card className="space-y-3">
           <p className="text-sm font-semibold">Where?</p>

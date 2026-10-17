@@ -19,6 +19,7 @@ const VERITY_TABLES = [
   "events",
   "geocode_cache",
   "rate_limit_counters",
+  "report_schedules",
   "reports",
   "source_records",
   "users",

@@ -1,7 +1,7 @@
-import type { EventCategory, EventStatus } from "@verity/contracts";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { CATEGORY_KIND, type EventCategory, type EventStatus } from "@verity/contracts";
+import { and, asc, eq, isNotNull } from "drizzle-orm";
 import type { Database } from "../db/client";
-import { events, reports, sourceRecords } from "../db/schema";
+import { events, reports, reportSchedules, sourceRecords } from "../db/schema";
 import { fromSourceRecord, type NormalizedEvidence } from "../verification/evidence";
 import { buildSearchContext, lookupPlace, type ReverseGeocoder, type SearchContext } from "../verification/geocoding";
 import { assignLineages } from "../verification/lineage";
@@ -70,6 +70,17 @@ async function loadSnapshot(db: Database, eventId: string): Promise<Snapshot | n
     .from(reports)
     .where(and(eq(reports.eventId, eventId), isNotNull(reports.locationLabel)))
     .limit(5);
+  // Reporters' claimed schedules (planned events only), oldest report first: search and identity hints, never a schedule.
+  const claims =
+    CATEGORY_KIND[event.category as EventCategory] === "planned"
+      ? await db
+          .select({ start: reportSchedules.scheduledStartAt, end: reportSchedules.scheduledEndAt })
+          .from(reportSchedules)
+          .innerJoin(reports, eq(reports.id, reportSchedules.reportId))
+          .where(eq(reports.eventId, eventId))
+          .orderBy(asc(reports.createdAt))
+          .limit(5)
+      : [];
   const stored = (await db.select().from(sourceRecords).where(eq(sourceRecords.eventId, eventId))).map(fromSourceRecord);
   return {
     event: {
@@ -81,6 +92,7 @@ async function loadSnapshot(db: Database, eventId: string): Promise<Snapshot | n
       firstSeenAt: event.firstSeenAt,
       scheduledStartAt: event.scheduledStartAt,
       scheduledEndAt: event.scheduledEndAt,
+      reportedSchedules: claims.map((c) => ({ start: c.start, end: c.end })),
       latitude: event.latitude,
       longitude: event.longitude,
       approximateLocation: event.approximateLocation,
