@@ -210,7 +210,8 @@ export function selectExcerpt(
 ): string | null {
   if (!text) return null;
   const words = [...activeTerms(category), ...ENDED_HINTS];
-  const named = (s: string) => names.some((re) => re.test(normalizePlaceText(s)));
+  // Name patterns run on accent-folded text, as in identity.ts and stance.ts (no street abbreviations).
+  const named = (s: string) => names.some((re) => re.test(foldDiacritics(s)));
   const mentionsEvent = (s: string) => named(s) || words.some((w) => new RegExp(`\\b${escapeRe(w)}\\b`, "i").test(s));
   const candidates = sentences(text).filter(mentionsEvent);
   if (candidates.length === 0) return null;

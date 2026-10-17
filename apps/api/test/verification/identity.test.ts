@@ -125,6 +125,21 @@ describe("correct named-event matches", () => {
     expect(d.ruleId).toBe("verified_independent_sources");
   });
 
+  it("prefers the sentence that names the event, including names with street-like words", () => {
+    const north = buildEventIdentity({ category: "festival", title: "North Beach Festival", scheduledStartAt: null, scheduledEndAt: null }, context);
+    const out = normalizeResult(
+      {
+        title: "Weekend guide",
+        url: "https://guide.example/w",
+        description: "",
+        content: "A street festival fills Plaza de César Chávez today. North Beach Festival is underway at Plaza de César Chávez with music.",
+        additional_data: { publish_date: minutesAgo(15).toISOString() },
+      } as never,
+      { category: "festival", context, query: "q", requestId: null, now: NOW, identity: north },
+    );
+    expect(out.ok && out.evidence).toMatchObject({ excerpt: "North Beach Festival is underway at Plaza de César Chávez with music.", identity: "match", stance: "supports" });
+  });
+
   it("keeps negation and cancellation working on the event's name", () => {
     expect(result("https://local-news.example/c", "Update", "Día San José was canceled at Plaza de César Chávez this morning because of rain.").stance).toBe("ended");
     expect(result("https://local-news.example/r", "Update", "Rumors that Día San José is happening at Plaza de César Chávez are unconfirmed.").stance).toBe("context");
