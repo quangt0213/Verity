@@ -1,4 +1,4 @@
-import { CATEGORY_KIND, type EventCategory, type EvidenceStance } from "@verity/contracts";
+import { CATEGORY_KIND, foldDiacritics, type EventCategory, type EvidenceStance } from "@verity/contracts";
 
 /**
  * Conservative, deterministic stance classification of ONE sentence with
@@ -99,10 +99,24 @@ export function activeTerms(category: EventCategory): string[] {
   return ACTIVE_TERMS[category];
 }
 
-export function classifyStance(sentence: string, category: EventCategory): EvidenceStance {
-  const text = sentence.replace(/\s+/g, " ").trim();
+/**
+ * Positions where the event's own name is mentioned ("Día de San José").
+ * `names` are case-insensitive patterns over accent-folded text (identity.ts).
+ */
+function nameMentions(text: string, names: readonly RegExp[]): number[] {
+  return names.flatMap((re) => [...text.matchAll(new RegExp(re.source, "gi"))].map((m) => m.index!));
+}
+
+/**
+ * Classify one sentence. `names` (optional) are patterns for the event's own
+ * distinctive name: for a named event, a mention of its name is a mention of
+ * the event, exactly like a category word, and the same negation, hearsay,
+ * quotation and framing guards apply to it.
+ */
+export function classifyStance(sentence: string, category: EventCategory, names: readonly RegExp[] = []): EvidenceStance {
+  const text = foldDiacritics(sentence.replace(/\s+/g, " ").trim());
   if (!text) return "context";
-  const active = eventMentions(text, ACTIVE_TERMS[category]);
+  const active = [...eventMentions(text, ACTIVE_TERMS[category]), ...nameMentions(text, names)].sort((a, b) => a - b);
   const ended = positions(text, ENDED_TERMS);
   const fullyContained = category === "fire" && FULLY_CONTAINED.test(text);
   if (active.length === 0 && ended.length === 0 && !fullyContained) return "context";
@@ -143,4 +157,20 @@ export function classifyStance(sentence: string, category: EventCategory): Evide
   if (CATEGORY_KIND[category] === "disruption" && HYPOTHETICAL.test(text)) return "context";
 
   return "supports";
+}
+
+/**
+ * Announcement framing: the sentence says the event WILL happen ("will be
+ * held", "is scheduled for", "tickets on sale", "join us next Saturday"),
+ * and says nothing about it happening now. An announcement establishes that
+ * an event is planned, never that it is occurring (rules.ts).
+ */
+const ANNOUNCEMENT =
+  /\b(?:will (?:be held|be hosted|take place|return|kick off|feature|celebrate|be|run|begin|start|open|bring|showcase|include)|(?:is|are|was|were) (?:scheduled|set|planned|slated|expected)|scheduled (?:for|to)|set (?:for|to) (?:take place|return|begin|start)|slated (?:for|to)|planned for|plans? to|upcoming|coming (?:up|soon)|join us|save the date|mark your calendars?|tickets? (?:are |go )?(?:on sale|available)|register now|rsvp|this coming|next (?:week|weekend|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i;
+const UNDERWAY = /\b(?:now|currently|underway|under way|ongoing|is happening|are happening|kicked off|got under ?way|is in full swing|right now|at this hour|so far today|draws|drew|packed|crowds? (?:filled|gathered|packed))\b/i;
+
+export function announcementFraming(sentence: string | null | undefined): boolean {
+  if (!sentence) return false;
+  const text = foldDiacritics(sentence);
+  return ANNOUNCEMENT.test(text) && !UNDERWAY.test(text);
 }

@@ -2,6 +2,7 @@ import { enrichWithPage } from "../verification/enrich";
 import type { NormalizedEvidence } from "../verification/evidence";
 import { selectExtractCandidates } from "../verification/extract-selection";
 import type { SearchContext } from "../verification/geocoding";
+import { buildEventIdentity } from "../verification/identity";
 import { assignLineages } from "../verification/lineage";
 import { DEFAULT_POLICY } from "../verification/policy";
 import { decide, type CommunitySignals, type Retrieval } from "../verification/rules";
@@ -78,6 +79,7 @@ export async function enrichWithExtracts(
     decide({ event: input.event, evidence: assignLineages(combine(input.stored, found), policy), community: input.community, retrieval: input.retrieval, now: deps.now(), policy }).escalation === null;
 
   const candidates = selectExtractCandidates({ found, stored: input.stored, max, policy });
+  const identity = buildEventIdentity(input.event, input.context);
   let extracts = 0;
   let pagesUsed = 0;
   const skipped: string[] = [];
@@ -105,7 +107,7 @@ export async function enrichWithExtracts(
       skipped.push(outcome.code);
       continue;
     }
-    const enriched = enrichWithPage(candidate, outcome.page, { category: input.event.category, context: input.context, policy });
+    const enriched = enrichWithPage(candidate, outcome.page, { category: input.event.category, context: input.context, policy, identity });
     if (!enriched.ok) {
       skipped.push(`extract_${enriched.reason}`);
       continue;

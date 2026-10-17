@@ -4,12 +4,15 @@ import {
   checkPublicHttpUrl,
   communityResponseInputSchema,
   eventSummarySchema,
+  foldDiacritics,
   isSafeHttpUrl,
+  jaccard,
   LIMITS,
   listEventsQuerySchema,
   normalizeMultiline,
   normalizeSingleLine,
   reportEventInputSchema,
+  textTokens,
 } from "./index";
 
 const validReport = {
@@ -204,5 +207,11 @@ describe("text normalization", () => {
 
   it("keeps paragraph breaks but caps blank runs", () => {
     expect(normalizeMultiline("one\r\n\r\n\r\n\r\ntwo  three")).toBe("one\n\ntwo three");
+  });
+
+  it("folds accents so accented and plain spellings compare equal", () => {
+    expect(foldDiacritics("Día San José, Plaza de César Chávez")).toBe("Dia San Jose, Plaza de Cesar Chavez");
+    expect([...textTokens("Día de San José en la Plaza de César Chávez")]).toEqual(["dia", "san", "jose", "plaza", "cesar", "chavez"]);
+    expect(jaccard(textTokens("Festival San José"), textTokens("festival san jose"))).toBe(1);
   });
 });

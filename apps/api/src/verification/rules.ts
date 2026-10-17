@@ -1,7 +1,8 @@
-import { ACTIVE_STATUSES, type EventCategory, type EventStatus } from "@verity/contracts";
+import { ACTIVE_STATUSES, CATEGORY_KIND, type EventCategory, type EventStatus } from "@verity/contracts";
 import { checkTransition } from "../domain/state-machine";
 import type { EvidenceRecord } from "./evidence";
 import { explainDecision } from "./explain";
+import { announcementFraming } from "./stance";
 import {
   DEFAULT_POLICY,
   evidenceBounds,
@@ -33,7 +34,12 @@ import {
  *  - PRODUCT RULE (S4.1): VERIFIED also needs at least one qualifying
  *    supporting record from an identified source class
  *    (policy.rules.verifiedSourceClasses: OFFICIAL, FIRST_PARTY). Any number of
- *    UNKNOWN web sources alone reaches LIKELY at most.
+ *    UNKNOWN web sources alone reaches LIKELY at most;
+ *  - SCHEDULED ≠ OCCURRING: for a planned event, an announcement ("will be
+ *    held on…") establishes that it is planned, never that it is happening.
+ *    It counts as support only while the event's ESTABLISHED schedule says
+ *    it is underway (a reporter's claimed schedule never does), and nothing
+ *    whose time lies entirely in the future counts.
  */
 
 export type Retrieval = "ok" | "no_results" | "unavailable" | "not_attempted";
@@ -73,8 +79,10 @@ export interface JudgedEvidence {
   record: EvidenceRecord;
   freshness: Freshness;
   timeMatch: TimeMatch;
-  /** Counts toward a decision: located, on time, not stale, and taking a stance. */
+  /** Counts toward a decision: located, on time, not stale, taking a stance, and about something happening (not only announced). */
   qualifies: boolean;
+  /** Would qualify, but only announces a planned event that its established schedule doesn't (yet) show underway. */
+  announcedOnly: boolean;
 }
 
 export interface LineageFacts {
@@ -112,6 +120,8 @@ export interface DecisionFacts {
   locationUnclear: number;
   /** Located, stance-taking records that don't count only because their time is known to the day, not the hour. */
   dateOnly: number;
+  /** External records that announce the planned event but don't show it is happening (scheduled ≠ occurring). */
+  announcedOnly: number;
   scheduledOver: boolean;
   /** For "N independent sources (M total)": all lineages and all records. */
   totalLineages: number;
@@ -259,13 +269,26 @@ export const RULES: readonly Rule[] = [
 
 // ---------------------------------------------------------------------------
 
+/** The event's ESTABLISHED schedule says it is happening now (started, and not past its known end plus grace). */
+function underway(event: TimedEvent, now: Date, policy: VerificationPolicy): boolean {
+  if (CATEGORY_KIND[event.category] !== "planned" || !event.scheduledStartAt || now < event.scheduledStartAt) return false;
+  const over = scheduledOverAt(event, policy);
+  return over === null || now <= over;
+}
+
 export function judge(record: EvidenceRecord, event: TimedEvent, now: Date, policy: VerificationPolicy): JudgedEvidence {
   const f = freshness(record, event, now, policy);
   const t = timeMatch(record, event, now, policy);
   // A community report is located by construction: the event is where it was pinned.
   const located = record.sourceType === "community_report" || record.locationMatch === "exact" || record.locationMatch === "near";
-  const qualifies = record.stance !== "context" && located && (f === "fresh" || f === "aging") && (t === "current" || t === "recent");
-  return { record, freshness: f, timeMatch: t, qualifies };
+  const timely = record.stance !== "context" && located && (f === "fresh" || f === "aging") && (t === "current" || t === "recent");
+  // Scheduled ≠ occurring: nothing entirely in the future, and an announcement only once the established schedule is underway.
+  const bounds = evidenceBounds(record, policy);
+  const future = bounds !== null && bounds.earliest > now.getTime();
+  const announcement =
+    CATEGORY_KIND[event.category] === "planned" && record.sourceType !== "community_report" && record.stance === "supports" && announcementFraming(record.excerpt);
+  const announcedOnly = timely && !future && announcement && !underway(event, now, policy);
+  return { record, freshness: f, timeMatch: t, qualifies: timely && !future && !announcedOnly, announcedOnly };
 }
 
 const STANCE_TIEBREAK = { ended: 0, contradicts: 1, supports: 2 } as const;
@@ -342,6 +365,7 @@ export function collectFacts(input: DecisionInput): DecisionFacts {
         hasDayPrecision(j.record) &&
         (j.freshness === "unknown" || j.timeMatch === "unclear"),
     ).length,
+    announcedOnly: judged.filter((j) => j.announcedOnly).length,
     scheduledOver: (() => {
       const over = scheduledOverAt(input.event, policy);
       return over !== null && input.now > over;

@@ -6,6 +6,7 @@ import { enrichWithPage } from "../verification/enrich";
 import type { NormalizedEvidence } from "../verification/evidence";
 import { selectExtractCandidates } from "../verification/extract-selection";
 import type { SearchContext } from "../verification/geocoding";
+import { buildEventIdentity } from "../verification/identity";
 import { mergeWithStored, unionSteps, withEventTime } from "../verification/merge";
 import { DEFAULT_POLICY } from "../verification/policy";
 import type { EscalationReason } from "../verification/rules";
@@ -171,7 +172,8 @@ export async function useAgentResult(
 ): Promise<AgentEvidenceUse | "lost_lease"> {
   const policy = deps.policy ?? DEFAULT_POLICY;
   const now = deps.now();
-  const result = agentEvidence({ citations: input.outcome.citations, proposals: input.outcome.proposals, category: input.event.category, context: input.context, now, runId: input.outcome.ref.runId, policy });
+  const identity = buildEventIdentity(input.event, input.context);
+  const result = agentEvidence({ citations: input.outcome.citations, proposals: input.outcome.proposals, category: input.event.category, context: input.context, now, runId: input.outcome.ref.runId, policy, identity });
 
   // One record per resource: a cited page already found by Search (or stored earlier) merges with it.
   const byUrl = new Map(input.found.map((f) => [f.canonicalUrl!, f]));
@@ -219,7 +221,7 @@ export async function useAgentResult(
       break;
     }
     if (outcome.status === "page_failed") continue;
-    const enriched = enrichWithPage(target, outcome.page, { category: input.event.category, context: input.context, policy });
+    const enriched = enrichWithPage(target, outcome.page, { category: input.event.category, context: input.context, policy, identity });
     if (!enriched.ok) continue;
     let updated = enriched.evidence;
     if (updated.publishedAt) establishedByPage += 1;

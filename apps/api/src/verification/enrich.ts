@@ -3,6 +3,7 @@ import { detectAttributions } from "./attribution";
 import { reconcileTimes, toEvidenceTime, type EvidenceTime } from "./dates";
 import type { NormalizedEvidence } from "./evidence";
 import type { SearchContext } from "./geocoding";
+import { applyIdentity, checkIdentity, namePatterns, type EventIdentity } from "./identity";
 import { unionSteps, withPublished } from "./merge";
 import { classifyOfficial, OFFICIAL_SOURCES, type OfficialSource } from "./official-sources";
 import { DEFAULT_POLICY, type VerificationPolicy } from "./policy";
@@ -50,7 +51,7 @@ export type Enriched =
 export function enrichWithPage(
   e: NormalizedEvidence,
   page: ExtractedPage,
-  input: { category: EventCategory; context: SearchContext; policy?: VerificationPolicy; registry?: readonly OfficialSource[] },
+  input: { category: EventCategory; context: SearchContext; policy?: VerificationPolicy; registry?: readonly OfficialSource[]; identity?: EventIdentity },
 ): Enriched {
   const policy = input.policy ?? DEFAULT_POLICY;
   const registry = input.registry ?? OFFICIAL_SOURCES;
@@ -68,9 +69,10 @@ export function enrichWithPage(
   }
 
   const title = e.title ?? page.title;
-  const pageExcerpt = selectExcerpt(page.text, input.category, input.context);
+  const names = namePatterns(input.identity);
+  const pageExcerpt = selectExcerpt(page.text, input.category, input.context, names);
   const excerpt = pageExcerpt ?? e.excerpt;
-  const stance = pageExcerpt ? classifyStance(pageExcerpt, input.category) : e.stance;
+  const stance = pageExcerpt ? classifyStance(pageExcerpt, input.category, names) : e.stance;
   const locationMatch = pageExcerpt ? matchLocation([title ?? "", pageExcerpt].join(". "), input.context) : e.locationMatch;
   const attributionText = [title, page.text.slice(0, 4000)].filter(Boolean).join("\n");
   const searchPublished = toEvidenceTime(e.publishedAt, e.publishedAtPrecision);
@@ -78,7 +80,7 @@ export function enrichWithPage(
     ? { time: null, conflict: true }
     : reconcileTimes(page.published, searchPublished, policy.timeConflictToleranceMinutes, policy.dayPrecision);
 
-  const evidence = withPublished(
+  const read = withPublished(
     {
       ...e,
       title,
@@ -93,5 +95,7 @@ export function enrichWithPage(
     },
     reconciled.time,
   );
+  // The whole page is checked for being about THIS event: it may name another place, date or edition.
+  const evidence = input.identity ? applyIdentity(read, checkIdentity({ title, excerpt, text: page.text, locationMatch }, input.identity)) : read;
   return { ok: true, evidence, timeConflict: reconciled.conflict, excerptFromPage: pageExcerpt !== null };
 }
