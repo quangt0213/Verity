@@ -1,5 +1,5 @@
 import type { EventCategory, EventStatus } from "@verity/contracts";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { events, sourceRecords } from "../db/schema";
 import { transitionEvent } from "../domain/transitions";
@@ -16,19 +16,47 @@ import { activeSignals, scheduleRecheck } from "./apply";
  *   resolved_schedule_ended  → RESOLVED (only with an actual known scheduled end)
  * It never infers that an unscheduled incident ended because its evidence got
  * old: old evidence means STALE, and RESOLVED needs evidence that it ended.
+ *
+ * Coverage: the sweep leaves most events unchanged, so nothing about them
+ * moves in the database. Ordering by a column (last_checked_at) would
+ * select the same first batch on every run and never reach the rest. The
+ * worker loop therefore passes a CURSOR: each run continues after the last
+ * event id it saw and wraps around at the end, so every sweepable event is
+ * visited within ceil(N / batchSize) runs. The cursor lives in memory (a
+ * restart begins a new pass); no schema change is needed. Without a cursor
+ * (one-off calls, tools) a run looks at the least recently checked batch.
  */
 
 const SWEEPABLE: EventStatus[] = ["UNVERIFIED", "DEVELOPING", "LIKELY", "VERIFIED", "CONFLICTING", "STALE"];
 const SWEEP_RULES = new Set<RuleId>(["stale_support_aged_out", "resolved_schedule_ended"]);
 
-export async function sweepAging(db: Database, input: { now: Date; policy?: VerificationPolicy; limit?: number }): Promise<Array<{ eventId: string; to: EventStatus }>> {
+/** Where the next run continues: after this event id, or from the start (null). Advanced in place by sweepAging. */
+export interface SweepCursor {
+  after: string | null;
+}
+
+export async function sweepAging(
+  db: Database,
+  input: { now: Date; policy?: VerificationPolicy; limit?: number; cursor?: SweepCursor },
+): Promise<Array<{ eventId: string; to: EventStatus }>> {
   const policy = input.policy ?? DEFAULT_POLICY;
-  const candidates = await db
-    .select({ id: events.id })
-    .from(events)
-    .where(and(inArray(events.status, SWEEPABLE), eq(events.isDemo, false)))
-    .orderBy(sql`${events.lastCheckedAt} asc nulls first`, asc(events.id))
-    .limit(input.limit ?? policy.sweep.batchSize);
+  const limit = input.limit ?? policy.sweep.batchSize;
+  const sweepable = and(inArray(events.status, SWEEPABLE), eq(events.isDemo, false));
+  const candidates = input.cursor
+    ? await db
+        .select({ id: events.id })
+        .from(events)
+        .where(input.cursor.after ? and(sweepable, gt(events.id, input.cursor.after)) : sweepable)
+        .orderBy(asc(events.id))
+        .limit(limit)
+    : await db
+        .select({ id: events.id })
+        .from(events)
+        .where(sweepable)
+        .orderBy(sql`${events.lastCheckedAt} asc nulls first`, asc(events.id))
+        .limit(limit);
+  // A short batch reached the end: the next run starts a new pass.
+  if (input.cursor) input.cursor.after = candidates.length < limit ? null : candidates.at(-1)!.id;
 
   const applied: Array<{ eventId: string; to: EventStatus }> = [];
   for (const { id } of candidates) {
