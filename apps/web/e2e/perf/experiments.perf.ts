@@ -1,15 +1,18 @@
 import { test, type BrowserContext, type Page } from "@playwright/test";
-import { armMove, awaitMove, captureNetwork, fakeVerityApi, instrument, longtasksBetween, saveResults, snapshot, timedMove, type CameraAction } from "./harness";
+import { armMove, awaitMove, captureNetwork, fakeVerityApi, instrument, longtasksBetween, saveResults, snapshot, startProfile, timedMove, type CameraAction } from "./harness";
 import { syntheticEvents } from "./synthetic-events";
 
 /**
  * A/B runs for MapLibre settings. PERF_VARIANT is JSON:
  *   {"workerCount": 2, "mapOptions": {"fadeDuration": 150}}
+ *   {"mapOptions": {"detail": false}}   (basemap without Verity's detail layer)
  * Perf-mode builds read these through window.__verityWorkerCount and
  * window.__verityMapOptions. PERF_LABEL names the output file.
  */
 const LABEL = process.env.PERF_LABEL ?? "exp";
 const VARIANT = JSON.parse(process.env.PERF_VARIANT ?? "{}") as { workerCount?: number; mapOptions?: object };
+/** e.g. 4 to approximate a mid-range phone's CPU on the measured (cached) pass. */
+const CPU_THROTTLE = Number(process.env.PERF_CPU_THROTTLE ?? 1);
 const WORLD = syntheticEvents(800, [-122.53, 37.69, -122.33, 37.84], 1);
 
 const MOVES: Array<[string, CameraAction | "near-me"]> = [
@@ -48,6 +51,7 @@ async function runMoves(page: Page, context: BrowserContext) {
   for (const [name, action] of MOVES) {
     await page.waitForTimeout(1200);
     const since = net.now();
+    const stopProfile = await startProfile(page);
     let timing;
     if (action === "near-me") {
       await context.grantPermissions(["geolocation"]);
@@ -58,6 +62,7 @@ async function runMoves(page: Page, context: BrowserContext) {
     } else {
       timing = await timedMove(page, action);
     }
+    const cpu = await stopProfile();
     const tiles = net.since(since).filter((r) => r.kind === "tile");
     const snap = await snapshot(page);
     out.push({
@@ -69,6 +74,7 @@ async function runMoves(page: Page, context: BrowserContext) {
       tileFailed: tiles.filter((r) => r.failure).length,
       tileKB: Math.round(tiles.reduce((s, r) => s + (r.bytes ?? 0), 0) / 1024),
       longtaskMs: longtasksBetween(snap, timing.armedAt).totalMs,
+      maplibreCpuMs: cpu.byScript["maplibre.js"] ?? 0,
     });
   }
   return out;
@@ -87,6 +93,10 @@ test("variant: warm-cache loads and moves, then network moves", async ({ browser
   const loads = [];
   const page = await warmContext.newPage();
   await prepare(page);
+  if (CPU_THROTTLE > 1) {
+    const cdp = await warmContext.newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: CPU_THROTTLE });
+  }
   for (let i = 0; i < 5; i++) {
     if (i === 0) await page.goto("/#/map");
     else await page.reload();

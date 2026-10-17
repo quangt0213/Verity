@@ -11,7 +11,8 @@ import type { SyntheticEvent } from "./synthetic-events";
  * commit, and listeners on the map exposed by perf-mode builds.
  */
 
-const RESULTS_DIR = resolve(import.meta.dirname, "../../test-results/perf");
+// Outside test-results/, which the other Playwright suites wipe on every run.
+const RESULTS_DIR = resolve(import.meta.dirname, "../../node_modules/.cache/verity-perf");
 
 export function saveResults(name: string, data: unknown) {
   mkdirSync(RESULTS_DIR, { recursive: true });
@@ -528,11 +529,17 @@ export interface LinkProfile {
  * for this run only, so A/B runs in one process don't refetch from the
  * provider (like an ordinary browser cache).
  */
-export async function throttleBasemap(page: Page, profile: LinkProfile, memo: Map<string, { body: Buffer; headers: Record<string, string>; status: number }>) {
+export async function throttleBasemap(
+  page: Page,
+  profile: LinkProfile,
+  memo: Map<string, { body: Buffer; headers: Record<string, string>; status: number }>,
+  /** Which requests share the link; default: the basemap. */
+  match: RegExp = /tiles\.openfreemap\.org|\.pbf(\?|$)/,
+) {
   let linkFreeAt = 0;
   const aborted = new WeakSet<Request>();
   page.on("requestfailed", (req) => aborted.add(req));
-  await page.route(/tiles\.openfreemap\.org|\.pbf(\?|$)/, async (route) => {
+  await page.route(match, async (route) => {
     const req = route.request();
     const url = req.url();
     let cached = memo.get(url);

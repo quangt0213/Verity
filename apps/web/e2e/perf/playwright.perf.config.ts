@@ -9,8 +9,9 @@ import { PERF_API_ORIGIN, PERF_PORT } from "./constants";
  *   npx playwright test -c e2e/perf/playwright.perf.config.ts
  *
  * Basemap styles can be swapped per run with the usual VITE_MAP_STYLE_URL_*
- * variables. Results are written to test-results/perf/*.json. Each run makes
- * a few hundred ordinary tile requests; don't loop it.
+ * variables. Results are written to node_modules/.cache/verity-perf/*.json. Each run makes
+ * a few hundred ordinary tile requests; don't loop it. PERF_DEVICE=mobile
+ * emulates a Pixel 7 instead of a 1360x860 desktop.
  */
 const passthrough = Object.fromEntries(
   ["VITE_MAP_STYLE_URL_LIGHT", "VITE_MAP_STYLE_URL_DARK", "VITE_MAP_EXTRA_ORIGINS"].flatMap((name) =>
@@ -29,8 +30,7 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${PERF_PORT}`,
     channel: process.env.PW_CHANNEL || undefined,
-    ...devices["Desktop Chrome"],
-    viewport: { width: 1360, height: 860 },
+    ...(process.env.PERF_DEVICE === "mobile" ? devices["Pixel 7"] : { ...devices["Desktop Chrome"], viewport: { width: 1360, height: 860 } }),
   },
   webServer: {
     cwd: "../..",

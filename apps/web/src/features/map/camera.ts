@@ -5,7 +5,7 @@ import type { Map as MapLibreMap } from "maplibre-gl";
  * viewports away at the destination zoom) jump instead: an animation there
  * shows nothing useful, and it requests and cancels tiles along the way. In
  * e2e/perf measurements that made far moves 0.5-1.5 s slower to finish loading
- * and issued ~40x more tile requests.
+ * and issued up to 40x more tile requests.
  */
 export function moveCamera(
   map: Pick<MapLibreMap, "getCanvas" | "project" | "getZoom" | "jumpTo" | "easeTo">,

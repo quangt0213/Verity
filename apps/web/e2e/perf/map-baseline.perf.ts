@@ -21,7 +21,7 @@ import { syntheticEvents } from "./synthetic-events";
 /**
  * M0/M2 measurements: initial load (cold and warm cache), pans, fly-tos,
  * React/MapLibre update overhead with many events, and route chunks.
- * Results: test-results/perf/<label>-*.json. PERF_LABEL names the run.
+ * Results: node_modules/.cache/verity-perf/<label>-*.json. PERF_LABEL names the run.
  */
 const LABEL = process.env.PERF_LABEL ?? "run";
 const THEME = process.env.PERF_THEME === "dark" ? "dark" : "light";
@@ -247,4 +247,46 @@ test("chunks loaded per route", async ({ browser }) => {
   }
   saveResults(`${LABEL}-routes`, out);
   console.log(JSON.stringify(out, null, 1));
+});
+
+test("theme switch reloads the basemap", async ({ page }) => {
+  await instrument(page);
+  await fakeVerityApi(page, WORLD);
+  const net = captureNetwork(page);
+  await page.addInitScript(() => {
+    localStorage.setItem("verity.onboarded", "true");
+    localStorage.setItem("verity.theme", JSON.stringify("light"));
+  });
+  await page.goto("/#/map");
+  await waitFirstIdle(page);
+  await page.waitForTimeout(1000);
+  const results = [];
+  for (const target of ["Dark", "System"]) {
+    const since = net.now();
+    await page.evaluate(() => {
+      const w = window as unknown as { __verityMap: { once(e: string, cb: () => void): void }; __perfTheme: Record<string, number> };
+      const state: Record<string, number> = {};
+      w.__perfTheme = state;
+      w.__verityMap.once("styledataloading", () => {
+        state.start = performance.now();
+        w.__verityMap.once("style.load", () => {
+          state.styleLoad = performance.now();
+          w.__verityMap.once("idle", () => (state.idle = performance.now()));
+        });
+      });
+    });
+    await page.getByRole("button", { name: new RegExp(`Switch to ${target}`) }).click();
+    await page.waitForFunction(() => (window as unknown as { __perfTheme: { idle?: number } }).__perfTheme.idle !== undefined, null, { timeout: 30_000 });
+    const t = await page.evaluate(() => (window as unknown as { __perfTheme: Record<string, number> }).__perfTheme);
+    const reqs = net.since(since);
+    results.push({
+      to: target,
+      styleLoadMs: Math.round(t.styleLoad! - t.start!),
+      idleMs: Math.round(t.idle! - t.start!),
+      network: summarizeNetwork(reqs),
+    });
+    await page.waitForTimeout(800);
+  }
+  saveResults(`${LABEL}-theme`, results);
+  console.log(JSON.stringify(results.map((r) => ({ to: r.to, styleLoadMs: r.styleLoadMs, idleMs: r.idleMs, tiles: r.network.tile }))));
 });
