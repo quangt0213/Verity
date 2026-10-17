@@ -52,6 +52,28 @@
     height: 100%;
   }
 
+  /*
+   * The document never scrolls: every page scrolls inside its own region (the
+   * map sidebar, the bottom sheet, a page's <main>). Without this, anything
+   * absolutely positioned inside a scroller whose containing block sits outside
+   * it (Tailwind's `sr-only` spans in the event sidebar, for example) extends
+   * the document's scrollable overflow, and scrolling the sidebar past its end
+   * moved the whole app up, leaving blank space under the map. `clip`, unlike
+   * `hidden`, can't be scrolled by focus() or scrollIntoView() either.
+   */
+  #root {
+    overflow: clip;
+  }
+
+  /*
+   * Vertical overscroll stops at the app: no chaining out of the iframe into a
+   * scrollable host page and no root bounce exposing the page background.
+   * Horizontal stays default so trackpad back/forward swipes keep working.
+   */
+  html {
+    overscroll-behavior-y: none;
+  }
+
   body {
     background-color: var(--app-bg);
     color: var(--app-fg);
