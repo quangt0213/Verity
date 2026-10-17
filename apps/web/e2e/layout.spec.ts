@@ -240,6 +240,22 @@ test.describe("mobile bottom sheet", () => {
   });
 });
 
+for (const route of ["/report", "/settings", "/following"]) {
+  test(`${route} scrolls inside its <main>, never the document, on a small phone`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto(`/#${route}`);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    // Scroll the page to its end the way a user would.
+    await page.locator("main").evaluate((el) => el.scrollTo(0, el.scrollHeight));
+    const m = await measure(page.mainFrame());
+    expect(m.docScrollHeight, "document must not be scrollable").toBeLessThanOrEqual(m.docClientHeight);
+    expect(m.docScrollTop).toBe(0);
+    // sr-only text in the form used to be positioned against the viewport and extend the document.
+    expect(m.appOverflowY, "content escaping <main>").toBeLessThanOrEqual(0);
+    expect(m.appOverflowX).toBeLessThanOrEqual(1);
+  });
+}
+
 test("the welcome page scrolls inside its own region on a short screen", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 480 });
   await page.goto("/#/welcome");

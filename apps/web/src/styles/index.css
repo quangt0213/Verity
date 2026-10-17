@@ -60,8 +60,12 @@
    * the document's scrollable overflow, and scrolling the sidebar past its end
    * moved the whole app up, leaving blank space under the map. `clip`, unlike
    * `hidden`, can't be scrolled by focus() or scrollIntoView() either.
+   * `relative` makes #root the containing block of any absolutely positioned
+   * element without a positioned ancestor, which would otherwise be laid out
+   * against the viewport and escape the clip.
    */
   #root {
+    position: relative;
     overflow: clip;
   }
 
@@ -165,7 +169,7 @@
   bottom: var(--sheet-inset, 0px);
   transition: bottom 200ms ease-out;
 }
-[data-sheet-inset] .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib {
-  /* Leave room for the Report button on the right (with the compact toggle and margins). */
+[data-sheet-inset="with-report"] .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib {
+  /* While the Report button shows, leave room for it on the right (with the compact toggle and margins). */
   max-width: calc(100vw - 190px);
 }
