@@ -1,14 +1,38 @@
 # Verification workstream handoff
 
-Owner: `verifier`. Current branch: `team/verification-r4` (worktree `<worktrees>/verification`), based on `team/integration` = `d63c448`. Rounds 1–3 are integrated. Git, code and tests win over this file.
+Owner: `verifier`. Current branch: `team/verification-r5` (worktree `<worktrees>/verification`), based on `team/integration` = `1534ae2`. Rounds 1–4 are integrated. Git, code and tests win over this file.
 
 ## Status
 
-**REVIEW (round 4).**
-- **Worker defect fixed.** `claimJobs` ignored its limit, which was the root cause of the real-PG flake (see "Round 4" below).
-- **Migration connection assessed.** The direct host works with the migrator unchanged.
-- **Earlier rounds.** Round 3: the migrator classifies failures and names its session. Round 2: paid Nimble work is opt-in. A5 and V2 remain recommendations; V2 stays deferred.
-- Nothing was pushed, merged or deployed. No live Nimble, no production writes, and the migrator was never run against production.
+**Round 5: rehearsal done; production dump NOT taken (waiting for the lead's GO).**
+- **Plan corrected.** `docs/BACKUP_RESTORE_PLAN.md`: PostgreSQL 17, owners and ACLs kept, same-snapshot counts, restore modes a and b, the DROP guard, and the scope label.
+- **Rehearsal passed** on PG17.11 (synthetic data).
+- **Round 4** (integrated): the `claimJobs` claim-limit fix and the direct-host migration connection.
+- **Earlier rounds** (integrated): failure classification and session name (3), paid work opt-in (2). A5 and V2 remain recommendations; V2 stays deferred.
+- Nothing was pushed, merged or deployed. No live Nimble, no production writes, the migrator was never run against production, and production hasn't been connected to in round 5.
+
+## Round 5: production backup (plan, scripts, PG17 rehearsal)
+
+Kept separate from the round 4 concurrency evidence below.
+
+- **Plan:** `docs/BACKUP_RESTORE_PLAN.md`, rewritten (commit `3cade18`). The rehearsal record and the destination layout are in the follow-up commit.
+- **Scripts:** `C:\Users\quang\verity-worktrees\ops-backup\` (not Git; no data, no secrets):
+  - `common.mjs`: the shared checks and fingerprint;
+  - `backup.mjs`: preflight, snapshot counts, `pg_dump` 17, inventory;
+  - `restore-validate.mjs`: the disposable PG17 server, modes a and b, the guard, every check, and `--guard-selftest`;
+  - `rehearse-source.mts` and `rehearse-writer.mts`: rehearsal only.
+- **Tools:** `C:\Users\quang\verity-tools\pgsql-17.11\bin` (EDB zip, provided by the lead), used by absolute path.
+- **Destination** (prepared by map-perf): `C:\VerityBackups\2026-10-18\`, with `archive\`, `restore\` (data directory and all logs) and `evidence\` (facts).
+- **Rehearsal result: PASS** (details in the plan's "Local rehearsal" section):
+  - the snapshot counts survived 646 concurrent write batches exactly, in both modes;
+  - the guard refused 3 negative cases, and its positive control dropped;
+  - mode a and mode b both exited 0, and every check passed, including owners and the role fingerprint.
+- **Script defects found by the rehearsal, fixed:** SQLSTATE 42725 (needed `::text` casts in two catalog queries; the preflight failed closed), and a `pg_ctl start` hang on inherited pipes (now no pipes).
+- **Production steps after GO:**
+  1. `node backup.mjs --pg-bin <pg17 bin> --dest C:\VerityBackups\2026-10-18 --source production`.
+  2. Give map-perf the archive file name (they write the `.sha256`).
+  3. `node restore-validate.mjs --pg-bin <pg17 bin> --dest C:\VerityBackups\2026-10-18 --archive <archive>`, which stops the server at the end.
+  4. Leave the restore resources for the lead to delete.
 
 ## Round 4: claim limit (root cause of the flake) and the migration connection
 
