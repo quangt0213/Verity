@@ -21,10 +21,28 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 
 | Workstream | Agent | Stage | Branch | Tests | Blocker | Next action |
 | --- | --- | --- | --- | --- | --- | --- |
-| Verification intelligence | `verifier` | IN_PROGRESS | `team/verification` | Baseline green | None | A1 query relevance and A2 event-identity checks |
-| Map performance, landmarks, 3D-ready | `map-perf` | IN_PROGRESS | `team/map-performance` | Baseline green | None | M0 baseline measurements |
-| Layout and UX | `layout` | IN_PROGRESS | `team/layout-fixes` | Baseline green | None | L0/L1 reproduce and fix desktop blank space under the map |
-| Integration | lead | IN_PROGRESS | `team/integration` | Baseline green | Waits on the three branches | Apply requested `MapShell.tsx` changes, then integrate |
+| Verification intelligence | `verifier` | DONE (merged) | `team/verification` @ `c29fe40` | check: contracts 54, API 665 + 13 skipped, web 90; e2e 29 + 1 skipped | User decisions (see below) | User: approve 0006 for production, the announcement rule, A5 and V2 options |
+| Map performance, landmarks, 3D-ready | `map-perf` | DONE (merged) | `team/map-performance` @ `105093a` | check: web 108; e2e 27 + 1 skipped; service 2 | None | User: POI density, cold-map +150 ms trade-off, padded bbox |
+| Layout and UX | `layout` | IN_PROGRESS (follow-up) | `team/layout-fixes` @ `89c8267` (merged) | check: web 95; e2e 53 + 19 skipped (with MapShell patch); service 2 | None | Feed render cost (memo EventCard, incremental list), schedule-field styling |
+| Integration | lead | REVIEW | `team/integration` @ `642836a` | 2026-10-17: check 834 (54 + 665 + 115; 13 skipped), bundle scan; e2e 55 + 19 skipped; service 2 | Layout follow-up | Merge the layout follow-up, final checks, delivery report |
+
+### Integration log
+
+| Commit | Step |
+| --- | --- |
+| `379c118` | Merge `team/layout-fixes` |
+| `b8a2333` | Lead: `layout-mapshell-2` (aside containment and width, mobile overlays); `evidence.spec` overflow measured inside `#root`; safe-area spec waits for animations (it failed in the full parallel run) |
+| `a2dea65` | Merge `team/verification` |
+| `cc0e74e` | Merge `team/map-performance` |
+| `642836a` | Lead: `map-perf-mapshell-1-integration` (memoized shell context); SECURITY.md and ARCHITECTURE.md updates |
+
+## Decisions waiting for the user
+
+1. **Migration 0006** (`report_schedules`): must be applied in production before the new worker starts (readiness check). Reports without a schedule keep working before it.
+2. **Scheduled ≠ occurring:** an announcement counts only while the event's *established* schedule says it is underway. Nothing in production sets `events.scheduled_*` (only the demo seed does), so for real planned events announcements never count today; verification needs coverage of the event actually happening. Errs toward UNVERIFIED.
+3. **A5** (reporter links): keep "never fetched" (recommended) or a default-off hint-only option. **V2**: post-Agent Extract allowance (recommended), reserve slots, or hold the Agent.
+4. **Map:** POI density (tuned only in San Francisco); keep the preconnect hint; accept +150 ms cold `/map` for −1.0 s on welcome; padded query bbox (product call; can hide events when the 500 cap truncates).
+5. **Layout:** pull-to-refresh disabled when top-level on mobile; Report button hides while a preview is open; sidebar `clamp(360px, 30vw, 440px)`.
 
 ## Sprint goals
 
