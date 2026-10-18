@@ -75,10 +75,30 @@ export class MigrationRunError extends Error {
   }
 }
 
+/**
+ * The migrator's session name, so operators can find it in pg_stat_activity
+ * (`WHERE application_name = 'verity-migrate'`). Migrator connection only;
+ * the API and worker pools keep the driver default. Informational: a pooler
+ * may rewrite it, so a different value is logged, never a reason to refuse.
+ */
+export const MIGRATOR_APPLICATION_NAME = "verity-migrate";
+
+/** Startup parameters for the migrator's single connection (applied again on any reconnect). */
+export function migratorConnectionParameters(timeouts: MigrationTimeouts): { application_name: string; lock_timeout: number; statement_timeout: number } {
+  return { application_name: MIGRATOR_APPLICATION_NAME, lock_timeout: timeouts.lockTimeoutMs, statement_timeout: timeouts.statementTimeoutMs };
+}
+
+/** A server-reported name, printable only if it looks like a name (anything else is shown as "(other)"). */
+export function printableApplicationName(value: string | null | undefined): string {
+  return value && /^[A-Za-z0-9._-]{1,64}$/.test(value) ? value : "(other)";
+}
+
 export interface MigrationResult {
   /** The effective settings as the server reported them (SHOW), or null for an embedded database. */
   lockTimeout: string | null;
   statementTimeout: string | null;
+  /** The session's application_name as the server reported it (SHOW), or null for an embedded database. */
+  applicationName: string | null;
 }
 
 export async function runMigrations(input: {
@@ -102,31 +122,33 @@ export async function runMigrations(input: {
       await database.close();
     }
     log("Embedded database: migration timeouts not applicable.");
-    return { lockTimeout: null, statementTimeout: null };
+    return { lockTimeout: null, statementTimeout: null, applicationName: null };
   }
 
-  const { lockTimeoutMs, statementTimeoutMs } = input.timeouts;
   // Throws DatabaseTlsError (a configuration refusal) for a remote database without a CA, before connecting.
   const options = postgresOptions(input.url, input.ca);
   const sql = postgres(input.url, {
     ...options,
     max: 1,
-    // Startup parameters (milliseconds): applied by the server to the session, and again on any reconnect.
-    connection: { lock_timeout: lockTimeoutMs, statement_timeout: statementTimeoutMs },
+    // Startup parameters (timeouts in milliseconds): applied by the server to the session, and again on any reconnect.
+    connection: migratorConnectionParameters(input.timeouts),
   });
   let started = false;
   try {
     const [lock] = await sql<Array<{ lock_timeout: string }>>`show lock_timeout`;
     const [statement] = await sql<Array<{ statement_timeout: string }>>`show statement_timeout`;
+    const [application] = await sql<Array<{ application_name: string }>>`show application_name`;
     const effective = { lockTimeout: lock!.lock_timeout, statementTimeout: statement!.statement_timeout };
     log(`Migration timeouts in effect: lock_timeout=${effective.lockTimeout} statement_timeout=${effective.statementTimeout}`);
+    // Logged only: a pooler may rewrite the name, and it isn't a safety property.
+    log(`Migration session application_name=${printableApplicationName(application?.application_name)}`);
     if (!timeoutsInEffect(effective, input.timeouts)) {
       throw new MigrationGateError("the connection did not keep the requested lock_timeout/statement_timeout");
     }
     // From here on migration SQL may reach the server.
     started = true;
     await migrate(drizzle(sql, { schema }) as never, { migrationsFolder: folder });
-    return effective;
+    return { ...effective, applicationName: application?.application_name ?? null };
   } catch (error) {
     if (error instanceof MigrationGateError) throw error;
     throw new MigrationRunError(started, { cause: error });
