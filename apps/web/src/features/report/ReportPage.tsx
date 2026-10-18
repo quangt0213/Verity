@@ -7,7 +7,7 @@ import {
   type Coordinates,
   type EventCategory,
 } from "@verity/contracts";
-import { Info } from "lucide";
+import { CircleHelp, Info } from "lucide";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useApi } from "../../api/ApiProvider";
@@ -22,7 +22,8 @@ import { approximateCoordinates } from "../../lib/geo";
 import { useTheme } from "../../theme/ThemeProvider";
 import { useAuth, useGuardedWrite } from "../auth/AuthProvider";
 import { LocationPicker } from "./LocationPicker";
-import { submitFailureErrors, type FieldErrors } from "./submit-errors";
+import { ArrivalCheck, type SubmitAttempt } from "./ArrivalCheck";
+import { KEPT, submitFailureErrors, submitOutcome, UNKNOWN_HEADLINE, unknownOutcomeReason, type FieldErrors } from "./submit-errors";
 
 /** A `datetime-local` value is the reporter's local wall-clock time; send it as an exact instant. */
 function localToIso(value: string): string | undefined {
@@ -72,11 +73,14 @@ export function ReportPage() {
   const [submitting, setSubmitting] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const alertRef = useRef<HTMLParagraphElement>(null);
+  const unknownRef = useRef<HTMLDivElement>(null);
   const focusFirstError = useRef(false);
   // A second submit while one is in flight is ignored (a fast double click lands before the button disables).
   const inFlight = useRef(false);
   // Remounts the alert per failed attempt, so the same message is announced again.
   const [attempt, setAttempt] = useState(0);
+  // Set when the service may or may not have stored the last attempt.
+  const [unknownOutcome, setUnknownOutcome] = useState<{ attempt: SubmitAttempt; reason: string } | null>(null);
   const [timeZone] = useState(localTimeZoneName);
 
   // After a failed submit, move focus to the first field that needs attention.
@@ -86,7 +90,7 @@ export function ReportPage() {
     const form = formRef.current;
     const target = errors.category
       ? form?.querySelector<HTMLElement>('input[name="category"]')
-      : (form?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? alertRef.current);
+      : (form?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? alertRef.current ?? unknownRef.current);
     target?.focus();
   }, [errors]);
 
@@ -125,15 +129,17 @@ export function ReportPage() {
       return;
     }
     setErrors({});
+    setUnknownOutcome(null);
     setSubmitting(true);
     inFlight.current = true;
+    const startedAt = Date.now();
     // If sign-in is needed, the dialog opens and the same report is submitted
     // right after; the form keeps everything that was typed.
     let result;
     try {
       result = await guarded(() => api.reportEvent(payload as Parameters<typeof api.reportEvent>[0]), "Sign in to submit your report");
     } catch {
-      result = { ok: false as const, error: { code: "network" as const, message: "" } };
+      result = { ok: false as const, error: { code: "network" as const, message: "", outcomeUnknown: true as const } };
     } finally {
       inFlight.current = false;
       setSubmitting(false);
@@ -144,7 +150,16 @@ export function ReportPage() {
       // Every field keeps its value, the schedule included; nothing is resent automatically.
       focusFirstError.current = true;
       setAttempt((n) => n + 1);
-      setErrors(submitFailureErrors(result.error, Boolean(scheduledStart || scheduledEnd)));
+      if (submitOutcome(result.error) === "unknown") {
+        // The service may have stored it: say so, and offer a check before the user decides to resend.
+        setUnknownOutcome({
+          attempt: { at: startedAt, title: payload.title, coordinates: payload.location.coordinates },
+          reason: unknownOutcomeReason(result.error),
+        });
+        setErrors({});
+      } else {
+        setErrors(submitFailureErrors(result.error, Boolean(scheduledStart || scheduledEnd)));
+      }
       return;
     }
     const merged = result.data.outcome === "attached_to_existing";
@@ -361,6 +376,25 @@ export function ReportPage() {
           Your report appears as <span className="font-medium text-fg">"Community report — verification in progress"</span>. It won't be
           shown as verified until independent evidence supports it.
         </div>
+
+        {unknownOutcome && (
+          <div
+            key={attempt}
+            ref={unknownRef}
+            role="alert"
+            tabIndex={-1}
+            className="rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-950 focus:outline-none dark:bg-amber-400/10 dark:text-amber-100"
+          >
+            <p className="flex items-start gap-2 font-semibold">
+              <Icon icon={CircleHelp} size={16} className="mt-0.5 shrink-0" />
+              {UNKNOWN_HEADLINE}
+            </p>
+            <p className="mt-1">
+              {unknownOutcome.reason} {KEPT} Before sending it again, check whether it arrived.
+            </p>
+            <ArrivalCheck attempt={unknownOutcome.attempt} />
+          </div>
+        )}
 
         {errors.form && (
           <p

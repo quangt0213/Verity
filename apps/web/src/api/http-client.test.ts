@@ -148,6 +148,34 @@ describe("http client writes", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "auth_required" } });
     expect(expired.sessionStore.get()).toBeNull();
   });
+
+  it("marks a write whose outcome is unknown, and only those", async () => {
+    const outcomeUnknown = async (reply: () => Promise<Response>) => {
+      const result = await apiWith(reply, { signedIn: true }).api.reportEvent(report);
+      expect(result.ok).toBe(false);
+      return !result.ok && result.error.outcomeUnknown === true;
+    };
+    // The request may have been carried out: no answer, or no usable one.
+    expect(await outcomeUnknown(() => Promise.reject(new TypeError("Failed to fetch")))).toBe(true);
+    expect(await outcomeUnknown(async () => jsonResponse({ error: { code: "internal", message: "Internal error" } }, 500))).toBe(true);
+    expect(await outcomeUnknown(async () => new Response("<html>Bad Gateway</html>", { status: 502 }))).toBe(true);
+    expect(await outcomeUnknown(async () => new Response("<html>Gateway Timeout</html>", { status: 504 }))).toBe(true);
+    expect(await outcomeUnknown(async () => new Response("<html>Request Timeout</html>", { status: 408 }))).toBe(true);
+    expect(await outcomeUnknown(async () => new Response("not json", { status: 201 }))).toBe(true);
+    // The service answered no in its own format.
+    expect(await outcomeUnknown(async () => jsonResponse({ error: { code: "validation_failed", message: "Some fields are invalid." } }, 400))).toBe(false);
+    expect(await outcomeUnknown(async () => jsonResponse({ error: { code: "rate_limited", message: "Slow down." } }, 429))).toBe(false);
+    expect(await outcomeUnknown(async () => jsonResponse({ error: { code: "auth_required", message: "Sign in to contribute." } }, 401))).toBe(false);
+  });
+
+  it("marks a timed-out write as unknown", async () => {
+    const { api } = apiWith(
+      (_url, init) =>
+        new Promise((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "TimeoutError")))),
+      { signedIn: true, timeoutMs: 20 },
+    );
+    expect(await api.reportEvent(report)).toMatchObject({ ok: false, error: { code: "unavailable", outcomeUnknown: true } });
+  });
 });
 
 describe("http client sign-in", () => {

@@ -1,12 +1,14 @@
-import type { AuthSession } from "@verity/contracts";
-import { screen, waitFor } from "@testing-library/react";
+import type { AuthSession, EventDetail, EventSummary } from "@verity/contracts";
+import { buildDemoEvents } from "@verity/contracts/demo";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createHttpApi } from "../../api/http-client";
 import { createSessionStore } from "../../api/session-store";
 import { renderWithApp } from "../../test/render";
 import { ReportPage } from "./ReportPage";
-import { SCHEDULE_NOT_ACCEPTED } from "./submit-errors";
+import { RESEND_NOTE } from "./ArrivalCheck";
+import { SCHEDULE_NOT_ACCEPTED, UNKNOWN_HEADLINE } from "./submit-errors";
 
 /**
  * Submitting through the real HTTP client against a fake service: what goes on
@@ -43,9 +45,29 @@ const OLD_API_REJECTION = {
   error: { code: "validation_failed", message: "Some fields are invalid.", request_id: "req-1", fields: { _: "Unexpected field" } },
 };
 
-function setup(reply: (body: Record<string, unknown>) => Response | Promise<Response>) {
+const TITLE = "Outdoor concert in the park";
+
+function summaryOf(detail: EventDetail): EventSummary {
+  const { current_claims: _c, evidence_summary: _s, evidence: _e, timeline: _t, community: _m, ...summary } = detail;
+  return summary;
+}
+const sample = summaryOf(buildDemoEvents(new Date())[0]!);
+const eventNamed = (id: string, title: string, updatedMsAgo: number): EventSummary => ({
+  ...sample,
+  id,
+  title,
+  last_updated_at: new Date(Date.now() - updatedMsAgo).toISOString(),
+});
+
+/** A fake service: `reply` answers report POSTs; `nearby` answers the public event list. */
+function setup(reply: (body: Record<string, unknown>) => Response | Promise<Response>, nearby: () => EventSummary[] = () => []) {
   const bodies: Record<string, unknown>[] = [];
+  const listQueries: URLSearchParams[] = [];
   const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+    if (url.startsWith(`${BASE}/api/v1/events?`) && init.method === "GET") {
+      listQueries.push(new URL(url).searchParams);
+      return json({ events: nearby(), generated_at: new Date().toISOString(), truncated: false }, 200);
+    }
     if (url !== REPORTS) return json({ error: { code: "not_found", message: "Not found" } }, 404);
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     bodies.push(body);
@@ -57,7 +79,7 @@ function setup(reply: (body: Record<string, unknown>) => Response | Promise<Resp
   const user = userEvent.setup();
   renderWithApp(<ReportPage />, { api, path: "/report" });
   const reportCalls = () => fetchMock.mock.calls.filter(([url]) => url === REPORTS).length;
-  return { user, bodies, reportCalls };
+  return { user, bodies, reportCalls, listQueries };
 }
 
 /** A `datetime-local` value `days` from now, in local time. */
@@ -140,35 +162,30 @@ describe("a report the service doesn't accept", () => {
     expect(bodies[1]).not.toHaveProperty("scheduled_end_at");
   });
 
-  it("5xx: explains the report wasn't sent, keeps every field, sends once", async () => {
-    const { user, reportCalls } = setup(() => json({ error: { code: "internal", message: "Internal error" } }, 500));
-    await fillConcert(user, true);
+  it("429 is a definite rejection, distinct from an unknown outcome", async () => {
+    const { user, reportCalls } = setup(() =>
+      json({ error: { code: "rate_limited", message: "Too many reports. Try again in a few minutes." } }, 429),
+    );
+    await fillConcert(user, false);
     await user.click(screen.getByRole("button", { name: "Submit report" }));
-
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Verity is temporarily unavailable, so your report wasn't sent.");
-    expect(alert).toHaveTextContent("Everything you entered is still here.");
-    expect(alert).toHaveTextContent("you can clear the schedule and try again");
-    expect(alert).toHaveFocus();
-    expect(screen.getByLabelText("Starts")).toHaveValue(localInput(2, 19));
-    expect(screen.getByLabelText("Ends")).toHaveValue(localInput(2, 22));
-    expect(screen.getByLabelText("Short title")).toHaveValue("Outdoor concert in the park");
-    expect(screen.getByRole("radio", { name: "Concert" })).toBeChecked();
+    expect(alert).toHaveTextContent("Too many reports. Try again in a few minutes. Your report wasn't accepted.");
+    expect(alert).not.toHaveTextContent(UNKNOWN_HEADLINE);
+    expect(screen.queryByRole("button", { name: "Check whether it arrived" })).not.toBeInTheDocument();
     await settle();
     expect(reportCalls()).toBe(1);
   });
 
-  it("network failure: says the connection failed, keeps every field, sends once", async () => {
-    const { user, reportCalls } = setup(() => Promise.reject(new TypeError("Failed to fetch")));
-    await fillConcert(user, true);
+  it("a 400 on a key the form doesn't show is a definite rejection", async () => {
+    const { user } = setup(() =>
+      json({ error: { code: "validation_failed", message: "Some fields are invalid.", fields: { observed_at: "Can't be in the future" } } }, 400),
+    );
+    await fillConcert(user, false);
     await user.click(screen.getByRole("button", { name: "Submit report" }));
-
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Couldn't reach Verity, so your report wasn't sent.");
-    expect(screen.getByLabelText("Starts")).toHaveValue(localInput(2, 19));
-    expect(screen.getByLabelText("Short title")).toHaveValue("Outdoor concert in the park");
-    await settle();
-    expect(reportCalls()).toBe(1);
+    expect(alert).toHaveTextContent("The service didn't accept this report (Some fields are invalid).");
+    expect(alert).toHaveFocus();
+    expect(screen.queryByText(UNKNOWN_HEADLINE)).not.toBeInTheDocument();
   });
 
   it("a 400 on a field the form shows marks that field, without a schedule message", async () => {
@@ -193,5 +210,92 @@ describe("a report the service doesn't accept", () => {
     await settle();
     expect(reportCalls()).toBe(1);
     release(json({ event_id: "evt-1", outcome: "created" }, 201));
+  });
+});
+
+describe("a report whose outcome is unknown", () => {
+  const unknownCases: [string, () => Response | Promise<Response>, RegExp][] = [
+    ["a network error", () => Promise.reject(new TypeError("Failed to fetch")), /connection failed before Verity answered/],
+    ["Verity's own 500", () => json({ error: { code: "internal", message: "Internal error" } }, 500), /didn't send a usable answer/],
+    ["a proxy's 502 page", () => new Response("<html>Bad Gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } }), /usable answer/],
+    ["a proxy's 504 page", () => new Response("<html>Gateway Timeout</html>", { status: 504, headers: { "Content-Type": "text/html" } }), /usable answer/],
+    ["a success status with an unreadable body", () => new Response("not json", { status: 201 }), /usable answer/],
+  ];
+
+  for (const [name, reply, reason] of unknownCases) {
+    it(`${name}: says it couldn't confirm, keeps every field, sends once, offers a check`, async () => {
+      const { user, reportCalls } = setup(reply);
+      await fillConcert(user, true);
+      await user.click(screen.getByRole("button", { name: "Submit report" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(UNKNOWN_HEADLINE);
+      expect(alert).toHaveTextContent(reason);
+      expect(alert).toHaveTextContent("Everything you entered is still here.");
+      expect(alert).not.toHaveTextContent("wasn't sent");
+      expect(alert).toHaveFocus();
+      expect(within(alert).getByRole("button", { name: "Check whether it arrived" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Starts")).toHaveValue(localInput(2, 19));
+      expect(screen.getByLabelText("Ends")).toHaveValue(localInput(2, 22));
+      expect(screen.getByLabelText("Short title")).toHaveValue(TITLE);
+      expect(screen.getByRole("radio", { name: "Concert" })).toBeChecked();
+      await settle();
+      expect(reportCalls()).toBe(1);
+    });
+  }
+
+  it("the check finds the event the report created, without leaving the form or resending", async () => {
+    const { user, reportCalls, listQueries } = setup(
+      () => Promise.reject(new TypeError("Failed to fetch")),
+      () => [eventNamed("evt-old", "Something else nearby", 3 * 3600_000), eventNamed("evt-new", `  ${TITLE.toUpperCase()} `, 5_000)],
+    );
+    await fillConcert(user, true);
+    await user.click(screen.getByRole("button", { name: "Submit report" }));
+    const alert = await screen.findByRole("alert");
+    await user.click(within(alert).getByRole("button", { name: "Check whether it arrived" }));
+
+    const status = await within(alert).findByText(/It arrived/);
+    expect(status).toHaveTextContent("You don't need to send it again.");
+    expect(within(alert).getByRole("link", { name: "Open the event" })).toHaveAttribute("href", "/events/evt-new");
+    // It asked for events near the reported point, changed since shortly before the attempt.
+    expect(listQueries).toHaveLength(1);
+    expect(listQueries[0]!.get("bbox")).toBeTruthy();
+    expect(Date.parse(listQueries[0]!.get("updated_since")!)).toBeLessThan(Date.now());
+    expect(screen.getByLabelText("Short title")).toHaveValue(TITLE);
+    expect(reportCalls()).toBe(1);
+  });
+
+  it("the check lists nearby events that changed, with what a resend would do", async () => {
+    const { user } = setup(
+      () => json({ error: { code: "internal", message: "Internal error" } }, 500),
+      () => [eventNamed("evt-near", "Concert at the bandstand", 20_000)],
+    );
+    await fillConcert(user, true);
+    await user.click(screen.getByRole("button", { name: "Submit report" }));
+    const alert = await screen.findByRole("alert");
+    await user.click(within(alert).getByRole("button", { name: "Check whether it arrived" }));
+    const status = await within(alert).findByText(/No event with your title/);
+    expect(status).toHaveTextContent("“Concert at the bandstand”");
+    expect(status).toHaveTextContent(RESEND_NOTE);
+    expect(within(alert).queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("the check says when nothing changed nearby, and the user can then send it again", async () => {
+    let call = 0;
+    const { user, bodies } = setup(
+      () => (++call === 1 ? new Response("<html>Bad Gateway</html>", { status: 502 }) : json({ event_id: "evt-1", outcome: "created" }, 201)),
+      () => [eventNamed("evt-old", "Old street fair", 5 * 3600_000)],
+    );
+    await fillConcert(user, true);
+    await user.click(screen.getByRole("button", { name: "Submit report" }));
+    const alert = await screen.findByRole("alert");
+    await user.click(within(alert).getByRole("button", { name: "Check whether it arrived" }));
+    expect(await within(alert).findByText(/most likely didn't arrive/)).toBeInTheDocument();
+    expect(bodies).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Submit report" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    // The user's resend is the same report, schedule included.
+    expect(bodies[1]).toEqual(bodies[0]);
   });
 });
