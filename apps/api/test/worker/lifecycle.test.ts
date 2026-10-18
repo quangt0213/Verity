@@ -9,7 +9,7 @@ import { createWorker } from "../../src/worker/loop";
 import { processJob } from "../../src/worker/process";
 import { sweepAging } from "../../src/worker/sweep";
 import { createTestContext, type TestContext } from "../helpers";
-import { claimFor, deps, eventRow, FakeClock, fakeRetriever, jobsFor, newEvent, newsAt, officialAt, results, runsFor } from "./harness";
+import { claimFor, deps, eventRow, FakeClock, fakeRetriever, jobsFor, newEvent, newsAt, officialAt, results, runsFor, testConfig } from "./harness";
 
 let ctx: TestContext;
 let tokens: string[];
@@ -255,10 +255,14 @@ describe("worker process", () => {
   it("runs as its own loop: claims, processes and sweeps", async () => {
     const clock = new FakeClock();
     const eventId = await newEvent(ctx, reporter());
-    await ctx.db.update(verificationJobs).set({ availableAt: clock.now() }).where(eq(verificationJobs.eventId, eventId));
-    const worker = createWorker({ ...deps(ctx, clock, { retriever: fakeRetriever(() => results.found([officialAt(clock)])) }), workerId: "w_loop" });
+    // Other tests in this file leave ready jobs behind, and a tick claims only up to its concurrency, oldest first:
+    // make this event's job the oldest ready one so the first tick takes it.
+    await ctx.db.update(verificationJobs).set({ availableAt: clock.ago(24 * 60) }).where(eq(verificationJobs.eventId, eventId));
+    const config = testConfig();
+    const worker = createWorker({ ...deps(ctx, clock, { config, retriever: fakeRetriever(() => results.found([officialAt(clock)])) }), workerId: "w_loop" });
     const { claimed } = await worker.tick();
     expect(claimed).toBeGreaterThan(0);
+    expect(claimed).toBeLessThanOrEqual(config.concurrency);
     await worker.drain();
     expect((await eventRow(ctx, eventId)).status).toBe("VERIFIED");
   });
