@@ -215,8 +215,11 @@ Preconditions, all required:
    **Use a direct or session-mode connection** (Supabase pooler port 5432, or
    the direct host), not the transaction-mode pooler (port 6543), which may not
    keep session settings. The operator confirms which connection is used.
-   Expected log line: `Migration timeouts in effect: lock_timeout=5s
-   statement_timeout=1min`.
+   Expected log lines: `Migration timeouts in effect: lock_timeout=5s
+   statement_timeout=1min`, then `Migration session
+   application_name=verity-migrate`. The second line is informational only. If
+   it shows a different name or `(other)`, the run continues, and the
+   uncertain-outcome procedure must use its fallback check.
    - **The statement timeout bounds each statement, not the whole run.** A
      run with several statements can take longer than
      `MIGRATE_STATEMENT_TIMEOUT_MS` in total without any of them timing out.
@@ -237,8 +240,8 @@ reference the new table). **Stop** after this gate.
 
 ### If the migrator doesn't finish cleanly
 
-Success is exit code 0, ending with `Migrations applied.` (after
-`Migration timeouts in effect: lock_timeout=5s statement_timeout=1min`).
+Success is exit code 0, ending with `Migrations applied.` (after the
+timeouts and application_name lines in item 6).
 Anything else falls into one of three outcome classes; the exit code and the
 message say which (`apps/api/src/db/migrate-runner.ts`, `apps/api/src/scripts/migrate.ts`).
 
@@ -268,7 +271,23 @@ The verifier rehearsed these on real PostgreSQL:
 
 1. **Don't retry yet.**
 2. **Confirm the previous migration session has ended.** Read-only, as the
-   service role:
+   service role.
+
+   **Primary check.** The migrator's single connection identifies itself as
+   `verity-migrate`. Its log prints `Migration session
+   application_name=verity-migrate` right after the timeouts line. The API and
+   worker pools use the driver default, `postgres.js`.
+
+   ```sql
+   SELECT pid, state, xact_start, wait_event_type
+     FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND application_name = 'verity-migrate';
+   ```
+
+   **Fallback check:** use this if the migrator's log printed a different name
+   or `(other)` (a pooler didn't pass the name through), or if the log line is
+   missing. Run it anyway when in doubt; it's read-only:
 
    ```sql
    -- Sessions that could still be the migrator: touching the migration objects,
@@ -290,11 +309,14 @@ The verifier rehearsed these on real PostgreSQL:
       AND l.pid <> pg_backend_pid();
    ```
 
-   The migrator sets no `application_name`, so this check matches on the
-   migration objects, open transactions and locks.
+   The application name isn't part of the safety gate: a different name never
+   refuses the run. That's why the fallback matches on the migration objects,
+   open transactions and strong locks (the migrator holds
+   `ShareRowExclusiveLock` on `reports` while adding the foreign key).
    Report counts and states only, never query text or client addresses. The
-   session has ended when neither query shows a migrator session (no
-   transaction open on the migration objects, no lock held on them). If one is
+   session has ended when the primary check returns no rows and the fallback
+   shows no migrator session (no transaction open on the migration objects, no
+   strong lock held on them). If one is
    still there, wait and check again. Ending it with `pg_terminate_backend` is
    a write and needs its own approval.
 3. **Inspect the history and the schema** (read-only):

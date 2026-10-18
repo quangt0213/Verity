@@ -474,10 +474,12 @@ pushed, and no hosting, Railway, Maypop or GitHub setting changed.
   automatically.
 - **Uncertain outcome procedure:**
   1. Don't retry.
-  2. Confirm the previous migration session has ended. The read-only
-     `pg_stat_activity` and `pg_locks` SQL matches on the migration objects,
-     open transactions and strong locks, because the migrator sets no
-     `application_name`. `pg_terminate_backend` needs its own approval.
+  2. Confirm the previous migration session has ended. The primary check is
+     `pg_stat_activity` with `application_name = 'verity-migrate'` (the
+     verifier's `55377f0`, merged as `e59cf86`; logged as `Migration session
+     application_name=verity-migrate`). The fallback, for when a pooler
+     doesn't pass the name through, is the query-text, open-transaction and
+     strong-lock query. `pg_terminate_backend` needs its own approval.
   3. Inspect the history count, newest `created_at` and hash, and
      `to_regclass('public.report_schedules')`.
   4. Decide with the approver:
