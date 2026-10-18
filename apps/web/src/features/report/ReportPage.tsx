@@ -22,10 +22,8 @@ import { approximateCoordinates } from "../../lib/geo";
 import { useTheme } from "../../theme/ThemeProvider";
 import { useAuth, useGuardedWrite } from "../auth/AuthProvider";
 import { LocationPicker } from "./LocationPicker";
+import { submitFailureErrors, type FieldErrors } from "./submit-errors";
 
-type FieldErrors = Partial<
-  Record<"category" | "title" | "description" | "location" | "source_url" | "scheduled_start_at" | "scheduled_end_at" | "form", string>
->;
 
 /** A `datetime-local` value is the reporter's local wall-clock time; send it as an exact instant. */
 function localToIso(value: string): string | undefined {
@@ -74,7 +72,12 @@ export function ReportPage() {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
+  const alertRef = useRef<HTMLParagraphElement>(null);
   const focusFirstError = useRef(false);
+  // A second submit while one is in flight is ignored (a fast double click lands before the button disables).
+  const inFlight = useRef(false);
+  // Remounts the alert per failed attempt, so the same message is announced again.
+  const [attempt, setAttempt] = useState(0);
   const [timeZone] = useState(localTimeZoneName);
 
   // After a failed submit, move focus to the first field that needs attention.
@@ -84,7 +87,7 @@ export function ReportPage() {
     const form = formRef.current;
     const target = errors.category
       ? form?.querySelector<HTMLElement>('input[name="category"]')
-      : form?.querySelector<HTMLElement>('[aria-invalid="true"]');
+      : (form?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? alertRef.current);
     target?.focus();
   }, [errors]);
 
@@ -97,6 +100,7 @@ export function ReportPage() {
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (inFlight.current) return;
     const scheduledStart = planned ? localToIso(startsAt) : undefined;
     const scheduledEnd = planned ? localToIso(endsAt) : undefined;
     const payload = {
@@ -123,23 +127,25 @@ export function ReportPage() {
     }
     setErrors({});
     setSubmitting(true);
+    inFlight.current = true;
     // If sign-in is needed, the dialog opens and the same report is submitted
     // right after; the form keeps everything that was typed.
-    const result = await guarded(() => api.reportEvent(payload as Parameters<typeof api.reportEvent>[0]), "Sign in to submit your report");
-    setSubmitting(false);
+    let result;
+    try {
+      result = await guarded(() => api.reportEvent(payload as Parameters<typeof api.reportEvent>[0]), "Sign in to submit your report");
+    } catch {
+      result = { ok: false as const, error: { code: "network" as const, message: "" } };
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
+    }
     if (!result) return;
 
     if (!result.ok) {
-      if (result.error.fields) {
-        const next: FieldErrors = {};
-        for (const [key, message] of Object.entries(result.error.fields)) {
-          next[(key.split(".")[0] ?? "form") as keyof FieldErrors] ??= message;
-        }
-        focusFirstError.current = true;
-        setErrors(next);
-      } else {
-        setErrors({ form: result.error.message });
-      }
+      // Every field keeps its value, the schedule included; nothing is resent automatically.
+      focusFirstError.current = true;
+      setAttempt((n) => n + 1);
+      setErrors(submitFailureErrors(result.error, Boolean(scheduledStart || scheduledEnd)));
       return;
     }
     const merged = result.data.outcome === "attached_to_existing";
@@ -358,7 +364,13 @@ export function ReportPage() {
         </div>
 
         {errors.form && (
-          <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-800 dark:bg-red-400/10 dark:text-red-200">
+          <p
+            key={attempt}
+            ref={alertRef}
+            role="alert"
+            tabIndex={-1}
+            className="rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-800 focus:outline-none dark:bg-red-400/10 dark:text-red-200"
+          >
             {errors.form}
           </p>
         )}

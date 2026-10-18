@@ -3,8 +3,8 @@
 | | |
 | --- | --- |
 | Owner | `layout` |
-| Branch | `team/layout-fixes` (worktree `<worktrees>/layout-fixes`), fast-forwarded to `team/integration` `642836a`, then follow-up commits |
-| Stage | REVIEW: L0–L4 and the follow-up (feed render cost, schedule fieldset) done |
+| Branch | `team/layout-r2` (worktree `<worktrees>/layout-fixes`), from `c0264c3` (draft PR #7 head). Earlier rounds: `team/layout-fixes` |
+| Stage | REVIEW: round 2 (report compatibility and failure UX) done; L0–L4 and the feed/schedule follow-up done earlier |
 | Last updated | 2026-10-17 |
 
 ## Goal
@@ -15,6 +15,78 @@ inside Maypop's cross-site iframe. Mobile overlays never cover each other or
 leave the screen, the sheet respects the safe area, and the desktop sidebar
 width adapts from 1024 px up. Follow-up: the feed stays cheap to render with
 500 events, and the report form's schedule fields match the rest of the form.
+
+## Round 2: report submission across releases
+
+**Release requirement.** Publish the new frontend only after the new API is
+serving **and** migration 0006 is applied. Until then, a report that includes a
+schedule fails: the running API rejects it (400), and a new API without 0006
+fails it (5xx). Reports without a schedule work in every combination.
+
+**Compatibility matrix** ("old" = `cc44449`, "new" = `c0264c3` + this branch):
+
+| Frontend → API | No schedule | With schedule | Verified by |
+| --- | --- | --- | --- |
+| New → old API | ✓ the keys are absent from the body | ✗ 400 `validation_failed`, `fields: { "_": "Unexpected field" }`; the form now says the service doesn't accept scheduled times yet and keeps the schedule | `packages/contracts/src/report-compat.test.ts` (frozen v1 schema + the API's field mapping); `ReportPage.submit.test.tsx` (wire body, UI) |
+| New → new API, 0006 applied | ✓ | ✓ | `report-compat.test.ts` (current schema); API suite `report-schedule.test.ts` |
+| New → new API, no 0006 | ✓ (no `report_schedules` insert) | ✗ 5xx, transaction rolled back, no partial report; the form says the report wasn't sent, keeps everything and suggests clearing the schedule if it keeps failing | Code reading (`apps/api/src/domain/reports.ts` inserts into `report_schedules` inside the report transaction) and the lead's earlier rehearsal; **not re-run here** |
+| Old → new API (either schema) | ✓ | n/a (the old form has no schedule) | `report-compat.test.ts`: an old-frontend body passes the current schema |
+
+The new frontend omits `scheduled_start_at`/`scheduled_end_at` when blank: the
+payload spreads them in only when set, `JSON.stringify` drops `undefined`, and a
+schedule typed for a planned category is dropped if the category changes to an
+unplanned one. The old API would reject a `null` value too (tested).
+
+**Failure UX** (`ReportPage.tsx`, `report/submit-errors.ts`): on any failed
+submit the form keeps every value, schedule included, and shows a specific
+message in a `role="alert"`. The alert remounts per attempt, so a repeated
+message is announced again. Focus goes to the first invalid field, or to the
+alert when no field is at fault.
+
+| Failure | Message | Focus |
+| --- | --- | --- |
+| 400 `_: "Unexpected field"` after sending a schedule | "The Verity service doesn't accept scheduled times yet, so this report wasn't sent. Your schedule is still filled in: clear Starts and Ends to send the report without it, or try again later." Starts is marked "Not accepted by the service yet" | Starts |
+| 400 on a field the form shows | That field's message | That field |
+| 400 on a field the form doesn't show | "The service couldn't accept this report (…). Everything you entered is still here." | Alert |
+| 5xx / timeout | "Verity is temporarily unavailable, so your report wasn't sent. Everything you entered is still here. Try again in a moment." If a schedule was sent, it adds "If it keeps failing, you can clear the schedule and try again." | Alert |
+| Network error | "Couldn't reach Verity, so your report wasn't sent. Check your connection and try again. Everything you entered is still here." | Alert |
+
+Never: dropping the schedule, resending automatically, or sending a second
+request on a double click. An in-flight guard backs up the disabled button.
+Before this change a 400 from the old API showed **nothing**: its only field
+key, `_`, matched no form field.
+
+**Suggested runbook text** (for `WORKSTREAM_STATUS.md` and the deployment
+checklist):
+
+> 1. Apply migration 0006 (approved separately; `MIGRATE_ON_START` unset or
+>    false).
+> 2. Deploy the new API and worker. Confirm the API serves and the worker
+>    passes its readiness check (it requires 0003–0006).
+> 3. Smoke-test a report with a schedule against the new API (201, and the
+>    `report_schedules` row exists) and one without.
+> 4. Only then publish the new frontend to Maypop.
+> 5. Rollback: unpublishing the frontend first is always safe, because old
+>    frontends never send a schedule. If the API must roll back while the new
+>    frontend is live, schedule-bearing reports get the "doesn't accept
+>    scheduled times yet" message and nothing else breaks.
+
+**Round 2 files:** `apps/web/src/features/report/ReportPage.tsx`,
+`apps/web/src/features/report/submit-errors.ts` (new),
+`apps/web/src/features/report/ReportPage.submit.test.tsx` (new),
+`packages/contracts/src/report-compat.test.ts` (new, test only), this file.
+
+**Round 2 tests (2026-10-17):**
+- `npm run check`: pass (contracts 58, API 665 passed / 13 skipped, web 132).
+- `PW_CHANNEL=chrome npx playwright test`: 57 passed, 21 skipped. This
+  includes `layout.spec.ts`, `layout-overlays.spec.ts`,
+  `report-schedule.spec.ts` and `smoke.spec.ts`. `layout.spec.ts` and
+  `report-schedule.spec.ts` rerun on their own: 21 passed, 11 skipped.
+- `npm run test:e2e:service`: 2 passed.
+- The new submit tests against the PR #7 `ReportPage.tsx`: 4 failed (the
+  old-API 400 showed nothing; 5xx and network showed a generic line), 5 passed.
+- Not run: the old API build, the new API against a database without 0006, and
+  the perf suite (no feed change).
 
 ## Diagnosis (L1: blank space under the desktop map)
 
@@ -234,6 +306,13 @@ The follow-up needs no MapShell change.
 
 ## Remaining risks
 
+- Round 2: detecting "schedules not supported" relies on the old API's error
+  body (`fields._ === "Unexpected field"` for a report that carried a
+  schedule). If a proxy or another API version answers differently, the user
+  still gets the generic 400 message with every field kept.
+- Round 2: the "new API without 0006 → 5xx" cell comes from code reading and
+  the lead's earlier rehearsal, not from a run on this branch.
+
 - `overscroll-behavior-y: none` turns off pull-to-refresh when Verity runs as a
   top-level page on mobile. That's intended for a map app, but the user decides.
 - The empirical host-scroll check passes with or without the overscroll rule
@@ -260,3 +339,6 @@ The follow-up needs no MapShell change.
    `PW_CHANNEL=chrome PERF_LABEL=x PERF_CPU_THROTTLE=4 npx playwright test -c e2e/perf/playwright.perf.config.ts feed.perf.ts`;
    results land in `node_modules/.cache/verity-perf/x-feed.json`.
 3. Check a mobile preview and the schedule fields on a real iPhone.
+4. Round 2: `git switch team/layout-r2`; the compatibility tests are
+   `npx vitest run src/report-compat.test.ts` in `packages/contracts` and
+   `npx vitest run src/features/report` in `apps/web`.
