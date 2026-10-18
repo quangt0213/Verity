@@ -100,26 +100,28 @@ export function MapShell() {
     }
   };
 
-  const context: ShellContext = {
-    events,
-    list: {
-      isPending: query !== null && list.isPending,
-      isFetching: list.isFetching,
-      error: list.error,
-      truncated: list.data?.truncated ?? false,
-      refetch: () => void list.refetch(),
-    },
-    zoomedOut,
-    mapStatus,
-    filters,
-    setFilters,
-    highlightedId,
-    setHighlightedId,
-    focusOn,
-    setSheet,
-    isDesktop,
-    now,
-  };
+  const listPending = query !== null && list.isPending;
+  const { error: listError, refetch } = list;
+  const truncated = list.data?.truncated ?? false;
+  // Stable unless something the outlet shows changes: background refetches,
+  // sheet drags, viewport reports and fly targets don't re-render the feed.
+  const context = useMemo<ShellContext>(
+    () => ({
+      events,
+      list: { isPending: listPending, error: listError, truncated, refetch: () => void refetch() },
+      zoomedOut,
+      mapStatus,
+      filters,
+      setFilters,
+      highlightedId,
+      setHighlightedId,
+      focusOn,
+      setSheet,
+      isDesktop,
+      now,
+    }),
+    [events, listPending, listError, truncated, refetch, zoomedOut, mapStatus, filters, setFilters, highlightedId, focusOn, isDesktop, now],
+  );
 
   const search = {
     value: searchInput,

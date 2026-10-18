@@ -225,7 +225,8 @@ works and that client roles can't read or write. It also fails if a later
 migration adds a table without RLS.
 
 Every later table gets the same treatment in its own migration: `0003` enables
-RLS on `verification_runs` and revokes the client roles explicitly.
+RLS on `verification_runs` and revokes the client roles explicitly, and `0006`
+does the same for `report_schedules`.
 `test/migrations.test.ts` upgrades a populated `0002` database under
 Supabase-like roles to the current schema and checks that no rows are lost and
 the new table is protected.
@@ -276,6 +277,16 @@ remote, and for a remote database:
 Refusals name the variables, never the URL or credentials (tested). The
 real-PostgreSQL test suites accept only a local `TEST_DATABASE_URL`, refuse
 Supabase hosts and never read `DATABASE_URL`.
+
+### Reported schedules
+
+A reporter may give an optional start and end time for a planned event. It is
+stored per report in `report_schedules` (RLS on, client roles revoked) as the
+reporter's **claim**, and is never copied to the event's established schedule
+(`events.scheduled_*`). A claim can't change status: the decision rules read
+only the established schedule. The worker uses claims only as search and
+identity hints (search window, date compatibility, an unconfirmed note in the
+Agent prompt). A wrong claim can only make sources count as context.
 
 ## User-submitted URLs (SSRF)
 

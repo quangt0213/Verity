@@ -159,6 +159,20 @@ extended verification".
   default. Swap providers with `VITE_MAP_STYLE_URL_LIGHT/DARK`; the CSP picks up
   the new origin. OSM attribution is always added. MapLibre fetches only the
   tiles the viewport needs, with no prefetching.
+- **Detail layer** (`basemap-detail.ts`, applied with `transformStyle`):
+  OpenFreeMap Positron/Dark ship no POI layers, so Verity adds parks, building
+  footprints, tinted major roads, a tuned dark theme, house numbers and
+  locally drawn POI icons (landmarks from z13, food z15, shops z16, stops z17)
+  from the same tiles and glyphs: no extra requests or CSP origins. It applies
+  only to OpenMapTiles-schema styles; `VITE_MAP_DETAIL=off` disables it. Event
+  markers stay dominant and reserve label space.
+- **Camera:** far targets (e.g. "Near me" across a region) jump instead of
+  easing, which avoids loading tiles along the path; nearby targets ease.
+  `camera.ts` holds the default camera (flat, pitch and rotation off) as the
+  seam for a future 3D mode, with a hidden `fill-extrusion` buildings layer
+  and an overlay anchor below the event markers for future route lines.
+- **Lazy routes:** the map and report routes load MapLibre on demand, so the
+  welcome, settings and following pages don't download it.
 - **Clustering:** a GeoJSON source with `cluster: true`. Clusters remember
   whether they contain a confirmed urgent disruption (red ring).
 - **Generated icons:** marker and cluster images are drawn on demand with
@@ -182,7 +196,12 @@ extended verification".
 
 `#/welcome` · `#/map` · `#/events/:id` · `#/report` · `#/following` · `#/settings`
 
-- **Desktop:** a 400 px sidebar with the feed or detail, and the map filling the rest.
+- **Desktop:** a `clamp(360px, 30vw, 440px)` sidebar with the feed or detail,
+  and the map filling the rest. The sidebar scrolls on its own.
+- **The document never scrolls:** `#root` is `position: relative; overflow:
+  clip`, and every scroller is positioned so absolutely positioned content
+  (e.g. `sr-only` text) can't extend the page. This keeps blank space from
+  appearing under the map, also inside the Maypop iframe.
 - **Mobile:** map first, a three-stop bottom sheet whose handle is a real
   button with dragging as an enhancement, and a floating Report button.
 - **Themes:** Light, Dark and System. System follows the Maypop host theme
@@ -287,6 +306,7 @@ Phase 2 produces UNVERIFIED events plus operator transitions through
 | `event_state_transitions` | Audit of every status change | append-only, `from ≠ to`, reason required |
 | `verification_jobs` | Outbox for verification work (reasons: new report, attached report, community dispute, manual, `RECHECK`) | unique idempotency key, one open job per event, attempt bounds |
 | `verification_runs` | One logical run per job: provenance (counts, decision rule, transition, evidence ids) and retry safety for the single paid agent investigation | one per job; agent slot claimed before the call; ids, counts and short codes only |
+| `report_schedules` | A reporter's claimed start/end for a planned event, one row per report | never copied to `events.scheduled_*`; search and identity hints only |
 | `geocode_cache` | Derived place names per provider and ~110 m cell (reverse geocoding for search context) | status ok/no_result only; lifetimes from policy; no user, reporter or event data |
 | `rate_limit_counters` | Fixed-window limits | keys are HMACs (no raw email or IP) |
 
@@ -391,6 +411,25 @@ Rules the engine enforces, each covered by a test:
 - Evidence that an event ended moves it toward RESOLVED.
 - Every transition goes through `transitionEvent`, which appends to `event_state_transitions` with reasons and
   evidence ids. History is never overwritten.
+- **Event identity** (`identity.ts`, `place-names.ts`): for a named event, a
+  record counts only if its title or quoted sentence names the event. A record
+  that is explicitly about another place ("San José, Costa Rica"), only
+  states dates outside the schedule, or names another edition is kept as
+  context. Accents are folded; in a compound location label only the first
+  part is the precise place, so a city-only match is never an exact location.
+- **Scheduled ≠ occurring:** for a planned event, an announcement establishes
+  only that it is planned. It counts as support only while the event's
+  **established** schedule says it is underway (a reporter's claimed schedule
+  never does), and evidence whose time lies entirely in the future never
+  counts.
+
+Search queries (`providers/nimble/query.ts`, at most 3 per job): a named
+planned event searches its quoted name with venue, city and month/year first,
+then the name in news (or official domains), and the category-and-place query
+only as a fallback. Disruptions without a distinctive name keep the category
+strategy. The aging sweep keeps an in-memory round-robin cursor so every
+event is reached, not only the first batch. The worker refuses to start
+unless migrations 0003–0006 are applied.
 
 ## 6. Nimble integration (planned, Phase 3)
 
