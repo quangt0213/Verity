@@ -74,7 +74,7 @@ paid calls.
 | Check | Result |
 | --- | --- |
 | `npm run check` | Pass. 933 tests: 58 contracts, 733 API (19 real-PostgreSQL skipped, run below), 142 web. Typecheck, lint, builds, bundle secret scan |
-| `npm run test:concurrency -w @verity/api` (throwaway local PostgreSQL 18, deleted afterwards) | 19/19, five runs in a row. The verifier saw the two-worker end-to-end test fail intermittently when the three files run in parallel (3 of 11 runs, and 1 of 5 before this round's change); it passed alone 6/6. Not reproduced here; open risk |
+| `npm run test:concurrency -w @verity/api` (throwaway local PostgreSQL 18, deleted afterwards) | 19/19, five runs in a row. **Corrected 2026-10-18:** the two-worker end-to-end test failed in **4 of 16 parallel-suite runs** (verifier; including runs on the commit before round 3's change), and passed alone 6/6. The 5 lead passes don't resolve it. An earlier partial count, "3 of 11", appears in PR #8's description and in this file's published copy; it is superseded. Open; root cause under investigation (round 4) |
 | Built `dist/migrate.js` | Exit 0 with the timeouts and `application_name=verity-migrate` lines; exit 3 for a missing database (`SQLSTATE 3D000`); exit 2 for `MIGRATE_LOCK_TIMEOUT_MS=0`. A placeholder password and the database name never appeared |
 | `PW_CHANNEL=chrome npx playwright test` | 57 passed, 21 skipped |
 | `PW_CHANNEL=chrome npm run test:e2e:service` | 2 passed |

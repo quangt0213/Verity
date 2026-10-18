@@ -137,7 +137,10 @@ it only after the backup evidence below has been presented.
 
 Preconditions, all required:
 
-1. **A fresh, validated backup.** Take a `pg_dump` (custom format, `-Fc`)
+1. **A fresh, validated backup.** Procedure:
+   [BACKUP_RESTORE_PLAN.md](BACKUP_RESTORE_PLAN.md), approved separately with
+   "Approve production backup: read-only `pg_dump` of the Verity schemas, plus
+   a local restore validation." Take a `pg_dump` (custom format, `-Fc`)
    immediately before the migration window. Store it outside the repository and
    outside OneDrive. There are two levels of validation, and they prove
    different things:
