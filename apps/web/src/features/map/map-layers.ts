@@ -8,6 +8,12 @@ export const LAYER_HALO = "verity-selected-halo";
 export const LAYER_CLUSTERS = "verity-clusters";
 export const LAYER_POINTS = "verity-points";
 export const LAYER_USER = "verity-user-location";
+/**
+ * An empty, hidden layer just below the event layers. Future overlays such as
+ * a navigation route line are added before it (map.addLayer(layer,
+ * LAYER_OVERLAY_ANCHOR)) so they sit above the basemap and under the markers.
+ */
+export const LAYER_OVERLAY_ANCHOR = "verity-overlay-anchor";
 
 export type MapTheme = "light" | "dark";
 
@@ -63,6 +69,7 @@ export function eventLayers(theme: MapTheme, selectedId: string | null): AddLaye
   const pointImage: ExpressionSpecification = ["concat", "vm:", ["get", "group"], ":", ["get", "category"], `:${theme}`];
 
   return [
+    { id: LAYER_OVERLAY_ANCHOR, type: "background", layout: { visibility: "none" } },
     {
       id: LAYER_HALO,
       type: "circle",
@@ -81,7 +88,8 @@ export function eventLayers(theme: MapTheme, selectedId: string | null): AddLaye
       type: "symbol",
       source: EVENTS_SOURCE,
       filter: ["has", "point_count"],
-      layout: { "icon-image": clusterImage, "icon-allow-overlap": true, "icon-ignore-placement": true },
+      // Always drawn, and basemap labels keep clear of them.
+      layout: { "icon-image": clusterImage, "icon-allow-overlap": true },
     },
     {
       id: LAYER_POINTS,
@@ -91,7 +99,6 @@ export function eventLayers(theme: MapTheme, selectedId: string | null): AddLaye
       layout: {
         "icon-image": pointImage,
         "icon-allow-overlap": true,
-        "icon-ignore-placement": true,
         "symbol-sort-key": ["get", "sort"],
       },
     },
@@ -114,4 +121,11 @@ export function userLocationLayer(theme: MapTheme): AddLayerObject {
       "circle-stroke-color": theme === "dark" ? "#15171b" : "#ffffff",
     },
   };
+}
+
+/** Everything eventsToGeoJSON renders, as a string: equal signatures need no setData. */
+export function eventsSignature(events: EventSummary[]): string {
+  let out = "";
+  for (const e of events) out += `${e.id}|${markerGroup(e)}|${e.category}|${e.coordinates.longitude}|${e.coordinates.latitude};`;
+  return out;
 }

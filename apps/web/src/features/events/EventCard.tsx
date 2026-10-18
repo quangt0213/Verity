@@ -1,4 +1,5 @@
 import type { EventSummary } from "@verity/contracts";
+import { memo } from "react";
 import { Link } from "react-router";
 import { Icon } from "../../components/ui/Icon";
 import { DemoBadge, StatusBadge } from "../../components/ui/StatusBadge";
@@ -50,7 +51,28 @@ interface EventCardProps {
   onOpen?: (event: EventSummary) => void;
 }
 
-export function EventCard({ event, now, selected, onHover, onOpen }: EventCardProps) {
+/**
+ * Two summaries render the same card if every field matches. A refetch (a pan,
+ * a poll) returns new objects for unchanged events, so identity alone isn't
+ * enough; the few nested values (coordinates, affected_area) are tiny.
+ */
+export function sameEventSummary(a: EventSummary, b: EventSummary): boolean {
+  if (a === b) return true;
+  const keys = Object.keys(a) as (keyof EventSummary)[];
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => {
+    const x = a[k];
+    const y = b[k];
+    return x === y || (typeof x === "object" && x !== null && typeof y === "object" && y !== null && JSON.stringify(x) === JSON.stringify(y));
+  });
+}
+
+function sameCardProps(a: EventCardProps, b: EventCardProps): boolean {
+  return a.now === b.now && a.selected === b.selected && a.onHover === b.onHover && a.onOpen === b.onOpen && sameEventSummary(a.event, b.event);
+}
+
+/** Memoized: feeds render hundreds of these, and a hover or refetch should only re-render the cards that changed. */
+export const EventCard = memo(function EventCard({ event, now, selected, onHover, onOpen }: EventCardProps) {
   const note = communityReportNote(event);
   const schedule = scheduleText(event.scheduled_start_at, event.scheduled_end_at, now);
   const category = CATEGORY_DISPLAY[event.category];
@@ -85,4 +107,4 @@ export function EventCard({ event, now, selected, onHover, onOpen }: EventCardPr
       </div>
     </Link>
   );
-}
+}, sameCardProps);
