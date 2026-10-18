@@ -434,8 +434,11 @@ with `main` (below). The SHA must be PR B's head after reconciliation.
 Before requesting approval:
 
 1. **Reconcile PR B with the current `main`.** PR A's merge moved `main`.
-   Either merge `main` into PR B or rebase PR B onto `main`, then re-run
-   `npm run check` and the Playwright suites on the result.
+   Change PR B's base on GitHub from `release/backend` to `main` (GitHub may
+   do this itself if `release/backend` is deleted after the merge). Either
+   merge `main` into PR B or rebase it onto `main` (push without force: prefer
+   the merge), then re-run `npm run check` and the Playwright suites on the
+   result.
 2. **Re-check that PR B is frontend-only.** The diff against `main` may touch
    only `apps/web/**`:
 
