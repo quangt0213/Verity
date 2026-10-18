@@ -172,7 +172,9 @@ describe("the migration runner (src/scripts/migrate.ts)", () => {
     ["a corrupt CA", corrupt, /cannot be parsed/],
   ])("refuses a remote database with %s, even with the acknowledgement and outside production", (_label, caPath, message) => {
     const run = runMigrate({ NODE_ENV: "development", DATABASE_URL: REMOTE, VERITY_DATABASE_ACK: HOST, VERITY_DB_CA_PATH: caPath });
-    expect(run.status).toBe(1);
+    // Exit 2: a configuration refusal, nothing attempted (scripts/migrate.ts).
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain("Migration refused: invalid or incomplete database configuration. Nothing was applied.");
     expect(run.stderr).toMatch(message);
     expect(run.stdout).not.toContain("Migrations applied");
     expect(`${run.stdout}${run.stderr}`).not.toContain(PASSWORD);
