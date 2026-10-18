@@ -1,12 +1,83 @@
 # Verification workstream handoff
 
-Owner: `verifier`. Current branch: `team/verification-r3` (worktree `<worktrees>/verification`), based on `team/integration` = `be0e16b`. Round 1 (`team/verification`, `c29fe40`) and round 2 (`team/verification-r2`, `869b89b`, `dfef1b8`) are integrated. Git, code and tests win over this file.
+Owner: `verifier`. Current branch: `team/verification-r4` (worktree `<worktrees>/verification`), based on `team/integration` = `d63c448`. Rounds 1–3 are integrated. Git, code and tests win over this file.
 
 ## Status
 
-**REVIEW (round 3).** The migration runner now classifies failures into four outcomes with distinct messages and exit codes (see "Migration gate" below). Rounds 1 and 2 are integrated: paid Nimble work is opt-in (all budgets default to 0), and migration 0006 has regression coverage. A5 and V2 remain recommendations; V2 stays deferred and its behavior is unchanged. Nothing was pushed, merged or deployed. No live Nimble, no production database.
+**REVIEW (round 4).**
+- **Worker defect fixed.** `claimJobs` ignored its limit, which was the root cause of the real-PG flake (see "Round 4" below).
+- **Migration connection assessed.** The direct host works with the migrator unchanged.
+- **Earlier rounds.** Round 3: the migrator classifies failures and names its session. Round 2: paid Nimble work is opt-in. A5 and V2 remain recommendations; V2 stays deferred.
+- Nothing was pushed, merged or deployed. No live Nimble, no production writes, and the migrator was never run against production.
 
-**Migration `apps/api/drizzle/0006_report_schedules.sql`** (new table `report_schedules`, RLS on, client roles revoked) is unchanged in round 2. It has been tested on PGlite and on a throwaway local PostgreSQL 18, and never applied anywhere remote. Production must apply it before the new worker starts (the worker's readiness check requires it). The API keeps creating reports without it; only a report that includes a schedule fails, with a clean rollback and a generic 500.
+## Round 4: claim limit (root cause of the flake) and the migration connection
+
+### Task 1: the intermittent "two workers end to end" failure
+
+**Captured failure** (parallel suite, temporary diagnostics, not committed):
+- the assertion at `worker.pg.test.ts:252` (`original.every(succeeded && attempts === 1)`) was false;
+- worker A's first `claimJobs(limit: 2)` returned **5** jobs, none its own, and worker B's returned 1 job, also foreign. Both loops stopped, and all 8 NEW_REPORT jobs stayed pending with 0 attempts;
+- 7 ready jobs from earlier tests in the same file were in the database.
+
+**Root cause 1: production worker defect.** `claimJobs` ran `UPDATE … WHERE id IN (SELECT … LIMIT n FOR UPDATE SKIP LOCKED)`:
+- **The plan.** PostgreSQL planned it as a Nested Loop Semi Join, re-scanning the inner side (Limit, LockRows) for each outer row (EXPLAIN on PG 18.6).
+- **Why it over-claims.** Each re-scan skips rows the same statement already updated, so one call claims every ready job. On a single connection, limit 2 claimed 30 of 30 jobs (PG 18.6) and 6 of 6 (PGlite).
+- **Impact.** `VERIFICATION_WORKER_CONCURRENCY` was not enforced: one worker grabbed and ran all ready jobs, and several worker processes didn't share the load. Budgets were still enforced per call.
+- **Fix** (`src/worker/jobs.ts`): `WITH ready AS MATERIALIZED (SELECT … LIMIT n FOR UPDATE SKIP LOCKED) UPDATE … FROM ready`, which locks the rows once. Results are sorted oldest first.
+- **Regression test.** `test/worker/claim-limit.test.ts` (default suite, PGlite) failed before the fix (6 claimed, limit 2) and passes after.
+- **After the fix on real PG.** Single-connection claims returned 2 each, and racing two-connection claims returned 2 each, accounting for all 30 jobs.
+
+**Root cause 2: harness defects that only passed because of the over-claim.**
+- **The two-worker test** shared its database with earlier tests' leftover ready jobs, stopped a worker when a claim held none of its own jobs, and stranded the foreign leases. With a correct claim it failed deterministically (3/3). It now uses its own throwaway database, and asserts that every claim is ≤2, holds only its own jobs, and leaves nothing `running`.
+- **`lifecycle.test.ts` "runs as its own loop"** expected the first tick to include its job, but it was the newest of several ready jobs. Its job is now the oldest ready one, and the test asserts that a tick claims at most `concurrency` jobs.
+- **The `claimFor` helper** made the target the NEWEST ready job and claimed 50. It now makes the target the oldest and claims 1.
+
+**Hypotheses ruled out, with evidence:**
+- Cross-file interference: each file has its own random-named throwaway database.
+- CPU or database contention: isolated runs under 24 busy loops, or under `pgbench -c 24`, never failed.
+- Database errors: the server log, with `log_min_error_statement` and `log_lock_waits`, held only test-induced errors.
+- Clock or lease expiry, and double claims: no lease was reaped in a captured failure, and every claimed attempt counted once.
+
+Running files in parallel only changed how the two workers' over-claiming statements interleaved.
+
+| Condition (local PG 18.6) | Before (d63c448) | After |
+| --- | --- | --- |
+| Parallel suite (3 files), 20 runs | **8 failed** | 0 failed |
+| Parallel suite, 20 runs on the final committed tree | — | 0 failed |
+| Parallel suite under 24 CPU busy loops, 20 runs | — | 0 failed |
+| Parallel suite under `pgbench -c 24`, 20 runs | — | 0 failed |
+| `worker.pg.test.ts` alone, 20 runs | 0 failed | 0 failed |
+| Alone under 24 CPU busy loops, 20 runs | 0 failed | — |
+| Alone under `pgbench -c 24`, 20 runs | 0 failed | — |
+
+### Task 2: the migration connection (harmless production probes, 2026-10-18 13:07:07–13:07:11 UTC)
+
+The probes ran over strict TLS with the repo's public CA. `DATABASE_URL` was read in-process and no value was printed. They used connect, SHOW/SET and `SELECT 1` only; no DDL, no DML, no migrator.
+
+**(a) Session pooler (the current URL, port 5432, `pooler.supabase.com`):**
+- **Startup parameters are dropped.** The connection starts with `lock_timeout 0`, `statement_timeout 2min`, and an application_name that isn't the migrator's.
+- **Session `SET` holds.** After a session-level SET, the values read `5s` / `1min` / `verity-migrate` on the same backend (`pg_backend_pid()` unchanged), and still hold in 4 later transactions on that backend.
+- **Visible to the runbook filter.** `pg_stat_activity` shows this backend as `verity-migrate`.
+- **`SET LOCAL` is scoped.** It read `7s` inside its transaction and reverted to `5s` after commit.
+
+**(b) Direct host (`db.<ref>.supabase.co:5432`, user `postgres`, derived in-process):**
+- **DNS is IPv6-only** (0 A records, 1 AAAA record).
+- **Reachable from this workstation** (which has IPv6). TLS verified against the repo CA, and authentication succeeded.
+- **Startup parameters are all honored:** application_name `verity-migrate`, `lock_timeout 5s`, `statement_timeout 1min`. The migrator's existing safety gate would pass.
+
+**(c) Decision: use the direct host; no code change.** The migrator already keeps its single connection (`max: 1`), sets the bounds as startup parameters, checks them with SHOW, and runs drizzle's migration transaction on that connection (proven locally: 55P03 and 57014 in `migrate-gate.pg.test.ts`). The runbook should say:
+- Run `node dist/migrate.js` with `DATABASE_URL` pointing at the **direct host** (user `postgres`), from an **IPv6-capable** machine. This workstation qualifies. Railway or other IPv4-only hosts are unverified and likely can't reach it.
+- Check the two log lines: `lock_timeout=5s statement_timeout=1min`, and `application_name=verity-migrate`.
+- Primary filter: `pg_stat_activity WHERE application_name = 'verity-migrate'`.
+
+**Not built: the pooler fallback.** The probe shows that session SETs would work on the pooler, but using them needs a code change: issue SETs on the single connection, verify by SHOW and `pg_backend_pid()`, then re-verify inside the migration transaction. It isn't needed while the direct host is usable.
+
+**Unverified:**
+- whether the operator's migration host has IPv6;
+- that the direct host behaves the same at migration time;
+- Supavisor's pinning under a real migration transaction. Only SHOW/SELECT transactions were probed, and there's no local Supavisor.
+
+**Migration `apps/api/drizzle/0006_report_schedules.sql`** (new table `report_schedules`, RLS on, client roles revoked) is unchanged. It has been tested on PGlite and on a throwaway local PostgreSQL 18, and never applied anywhere remote. Production must apply it before the new worker starts (the worker's readiness check requires it). The API keeps creating reports without it; only a report that includes a schedule fails, with a clean rollback and a generic 500.
 
 ## Round 2: paid work is opt-in, and 0006 regression tests
 
@@ -148,9 +219,16 @@ Option 1 is the only one that makes the paid run useful without weakening the de
 
 - Round 1 (`team/verification`): `5628f41`, `a5e53aa`, `62f47b6`, `7df1c8a`, `c29fe40`.
 - Round 2 (`team/verification-r2`): `869b89b`, `dfef1b8` on top of `c0264c3` (integrated).
-- Round 3 (`team/verification-r3`): one commit on top of `be0e16b`; see `git log --oneline be0e16b..team/verification-r3`.
+- Round 3 (`team/verification-r3`): `b0502e3`, `55377f0` (integrated).
+- Round 4 (`team/verification-r4`, on `d63c448`): `9863d53` (the claim limit fix, plus harness fixes), then this handoff commit.
 
 ## Tests actually run
+
+Round 4 (2026-10-18, on `team/verification-r4`):
+- `npm run check` at the root before `9863d53`: pass. Contracts 58; API 734 passed + 19 skipped; web 142; bundle secret scan passed.
+- Real-PG before/after runs: see the Round 4 table above (local PG 18.6 throwaway cluster on 127.0.0.1:55432 with trust auth and extra logging, stopped and deleted afterwards).
+- Production: one harmless connection probe (pooler and direct), as described above.
+- Not run: Playwright (no web change).
 
 Round 3 (2026-10-18, on `team/verification-r3`):
 - `npm run check` at the root: pass. Contracts 58; API 731 passed + 19 skipped (49 files, 3 skipped: the real-PG suites); web 132; bundle secret scan passed. One earlier run failed only on a timing flake in the layout-owned `apps/web/src/features/events/FeedPanel.test.tsx` (5.6 s against its 5 s limit, under load). It passes alone 3 of 3 times (4.5–5.8 s), and the full re-run passed. No web file changed in round 3.
@@ -199,7 +277,10 @@ Round 1 (2026-10-17):
 - Failure classification depends on postgres.js error shapes: `PostgresError` with `severity` for server errors, and string `code`s for transport errors. A driver upgrade that changes them would degrade toward UNKNOWN (the safe direction), never toward a false "rolled back". The unit tests pin the shapes.
 - A server SQLSTATE returned in reply to COMMIT itself (for example, a deferred constraint) is classified as rolled back, which is what PostgreSQL does. A lost connection around COMMIT is UNKNOWN.
 - `FeedPanel.test.tsx` (layout-owned) runs close to its 5 s timeout and can fail under load. Suggest raising that test's timeout or splitting it.
-- `test/concurrency/worker.pg.test.ts` "runs two workers end to end" is intermittent when the three real-PG files run in parallel on one server (line 252: a NEW_REPORT job not `succeeded`/1 attempt). It predates round 3. Likely contention, e.g. a slow attempt being reaped or retried under the fake clock. It needs investigation in a future round. It never failed when run alone.
+- **The production worker still over-claims until this fix is deployed.** The deployed `cc44449` worker claims every ready job in one call. This is harmless at today's volume (one pending job, zero budgets), but it ignores `VERIFICATION_WORKER_CONCURRENCY`.
+- **No `ORDER BY` on RETURNING.** `claimJobs` returns rows sorted in JS by microsecond `available_at`/`created_at`; PostgreSQL gives no order for `UPDATE … RETURNING`.
+- **`claimOne` in `worker.pg.test.ts`** still claims with `limit: 50` and its target newest. It's fine while that file has fewer than 50 ready jobs, and it fails loudly ("no job to claim") if that ever changes.
+- **The migration needs an IPv6-capable host.** The direct database host is IPv6-only. Railway and other IPv4-only environments are unverified.
 - Exit codes changed from a single 1 to 2–5. Anything that checks only for non-zero is unaffected; anything that matched exit 1 must be updated (the runbook).
 - The 60 s statement default bounds each statement, not the whole run. A large future data migration may need an explicit higher `MIGRATE_STATEMENT_TIMEOUT_MS`.
 - The 0006 privilege and RLS checks run on PGlite with Supabase-like roles. The real-PostgreSQL suite checks that 0000–0006 apply and that RLS is on for `report_schedules`, but it does not repeat the client-role privilege matrix.
@@ -221,6 +302,6 @@ Round 1 (2026-10-17):
 
 ## Exact resumption steps
 
-1. `cd <worktrees>/verification && git switch team/verification-r3 && git log --oneline be0e16b..HEAD`.
+1. `cd <worktrees>/verification && git switch team/verification-r4 && git log --oneline d63c448..HEAD`.
 2. `npm run check` at the worktree root. For UI changes, take the e2e lock and run `PW_CHANNEL=chrome npm run test:e2e` in `apps/web`.
 3. Open items: A5 option (b/c) and V2 option 1 are both small and behind flags; implement only after the decisions above.
