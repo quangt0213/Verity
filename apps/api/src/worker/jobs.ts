@@ -1,11 +1,11 @@
-import { and, asc, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import type { Database, Queryable } from "../db/client";
 import { verificationJobs, type JobReason } from "../db/schema";
 
 /**
  * Claiming and leasing verification jobs.
  *
- * A claim is one statement: lock ready pending jobs with FOR UPDATE SKIP LOCKED
+ * A claim is one statement: lock at most N ready pending jobs with FOR UPDATE SKIP LOCKED
  * and mark them running in the same UPDATE, so two workers (or connections)
  * can never claim the same job. The LEASE is (job id, worker id, attempt
  * number). Every later write is fenced on all three: a worker whose lease was
@@ -24,47 +24,61 @@ export interface Lease {
   claimedAt: Date;
 }
 
+interface ClaimedRow {
+  id: string;
+  event_id: string;
+  reason: string;
+  attempts: number;
+  max_attempts: number;
+  /** Microseconds since the epoch, for ordering ties exactly (bigint arrives as a string). */
+  available_us: string | number;
+  created_us: string | number;
+}
+
+/**
+ * Claim at most `limit` ready jobs, oldest first.
+ *
+ * The ready rows are locked ONCE in a MATERIALIZED CTE and then updated. The
+ * earlier form, UPDATE … WHERE id IN (SELECT … LIMIT n FOR UPDATE SKIP
+ * LOCKED), let the planner choose a nested-loop semi-join that re-scans the
+ * locking subquery for every outer row. Each re-scan skipped the rows the same
+ * statement had just updated, so one call claimed EVERY ready job whatever
+ * the limit (test/worker/claim-limit.test.ts), and the worker's concurrency
+ * limit was not enforced.
+ */
 export async function claimJobs(db: Queryable, input: { workerId: string; limit: number; now: Date }): Promise<Lease[]> {
   if (input.limit <= 0) return [];
-  const ready = db
-    .select({ id: verificationJobs.id })
-    .from(verificationJobs)
-    .where(
-      and(
-        eq(verificationJobs.status, "pending"),
-        lte(verificationJobs.availableAt, input.now),
-        lt(verificationJobs.attempts, verificationJobs.maxAttempts),
-      ),
+  const now = input.now.toISOString();
+  const result = (await db.execute(sql`
+    with ready as materialized (
+      select id from verification_jobs
+      where status = 'pending' and available_at <= ${now}::timestamptz and attempts < max_attempts
+      order by available_at, created_at
+      limit ${Math.floor(input.limit)}
+      for update skip locked
     )
-    .orderBy(asc(verificationJobs.availableAt), asc(verificationJobs.createdAt))
-    .limit(input.limit)
-    .for("update", { skipLocked: true });
+    update verification_jobs j
+       set status = 'running', attempts = j.attempts + 1, locked_by = ${input.workerId},
+           locked_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
+      from ready
+     where j.id = ready.id and j.status = 'pending'
+    returning j.id, j.event_id, j.reason, j.attempts, j.max_attempts,
+              (extract(epoch from j.available_at) * 1000000)::bigint as available_us,
+              (extract(epoch from j.created_at) * 1000000)::bigint as created_us`)) as unknown as ClaimedRow[] | { rows: ClaimedRow[] };
+  const rows = Array.isArray(result) ? result : result.rows;
+  const order = (a: ClaimedRow, b: ClaimedRow) => {
+    const byAvailable = BigInt(a.available_us) - BigInt(b.available_us);
+    const byCreated = BigInt(a.created_us) - BigInt(b.created_us);
+    return byAvailable !== 0n ? (byAvailable < 0n ? -1 : 1) : byCreated === 0n ? 0 : byCreated < 0n ? -1 : 1;
+  };
 
-  const claimed = await db
-    .update(verificationJobs)
-    .set({
-      status: "running",
-      attempts: sql`${verificationJobs.attempts} + 1`,
-      lockedBy: input.workerId,
-      lockedAt: input.now,
-      updatedAt: input.now,
-    })
-    .where(and(inArray(verificationJobs.id, ready), eq(verificationJobs.status, "pending")))
-    .returning({
-      id: verificationJobs.id,
-      eventId: verificationJobs.eventId,
-      reason: verificationJobs.reason,
-      attempts: verificationJobs.attempts,
-      maxAttempts: verificationJobs.maxAttempts,
-    });
-
-  return claimed.map((j) => ({
+  return [...rows].sort(order).map((j) => ({
     jobId: j.id,
-    eventId: j.eventId,
+    eventId: j.event_id,
     reason: j.reason as JobReason,
     workerId: input.workerId,
-    attempt: j.attempts,
-    maxAttempts: j.maxAttempts,
+    attempt: Number(j.attempts),
+    maxAttempts: Number(j.max_attempts),
     claimedAt: input.now,
   }));
 }

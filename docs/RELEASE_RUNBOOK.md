@@ -36,7 +36,7 @@ that gate's phrase.**
 
 Git, code and tests win over this file. If they disagree, fix this file.
 
-## What deploys what (verified 2026-10-17 from the repository and GitHub)
+## What deploys what (repository and GitHub 2026-10-17; Railway, Maypop and GitHub dashboards 2026-10-18)
 
 | Fact | Evidence | Status |
 | --- | --- | --- |
@@ -45,12 +45,12 @@ Git, code and tests win over this file. If they disagree, fix this file.
 | `verity-api` deploys have failed before | Its status failed on `ea7058e` and `053eade` | Verified |
 | No Railway config-as-code, CI workflow or branch protection | No `railway.json`/`.toml`, `nixpacks`, `Procfile` or `.github/workflows`; no protection rules | Verified |
 | API image starts `node dist/server.js` | `apps/api/Dockerfile` `CMD` | Verified |
-| Worker start command | The repo defines only `start:worker` = `node dist/worker.js`; the command Railway runs, the Dockerfile path and the root directory are service settings | **Operator must confirm** |
-| Railway watch paths and "wait for CI" | Service settings | **Operator must confirm** |
-| Maypop rebuild/publish trigger and branch | Maypop leaves no trace in GitHub (no webhooks, deployments, statuses or checks); `maypop.toml` has no branch or publish key | **Operator must confirm** |
-| The frontend's API address is compiled in | `VITE_VERITY_DATA_SOURCE` and `VITE_VERITY_API_URL` are build-time variables and also feed the CSP `connect-src`; no `.env.production` is committed. A rebuild without them shows "not connected" | Mechanism verified; Maypop's values **operator must confirm** (names only) |
-| Paid Nimble work is off unless configured | Round 2: the four paid budgets default to `0`; missing, blank or whitespace = `0` = no paid call (`apps/api/src/worker/config.ts`, tests in `apps/api/test/worker-config.test.ts` and `test/worker/zero-budgets.test.ts`) | Verified in code; production values **operator must confirm** |
-| `MIGRATE_ON_START=true` would apply migrations when the API starts | `apps/api/src/server.ts` | Verified in code; production value **operator must confirm** |
+| Worker start command | Railway `verity-worker`: custom start command `node dist/worker.js`, Dockerfile `/apps/api/Dockerfile`, no root directory. `verity-api`: no custom start command (Dockerfile `CMD`), `RAILWAY_DOCKERFILE_PATH=/apps/api/Dockerfile`, no pre-deploy step | Verified 2026-10-18 (Railway dashboard) |
+| Railway branch, watch paths, environments | Both services: branch `main`, automatic deploys on, **no watch paths** (any merge redeploys both). One environment, `production`; **PR environments are off**. The Railway GitHub App has access to all repositories | Verified 2026-10-18 (Railway and GitHub dashboards) |
+| Maypop rebuild/publish path | The published v2 was built from Maypop's editor workspace: iteration 1 "Scaffold React and Vite app", iteration 2 "Imported Verity from your GitHub", iteration 3 "The approved synchronization" (Oct 12, latest). That is `cc44449`'s `apps/web` with 71 of 73 source files identical; `src/config/env.ts` (plus its test) adds a guard. Maypop leaves no trace in GitHub, and no Maypop app or OAuth grant is listed on the account. Whether a push syncs or publishes by itself, and what the editor's "Done" does, are **not verified**. Treat Done, Revert, Discard and any sync as publish-adjacent, needing their own approval | Workspace and history verified 2026-10-18; trigger **unverified** |
+| The frontend's API address is compiled in | `VITE_VERITY_DATA_SOURCE` and `VITE_VERITY_API_URL` are build-time variables and also feed the CSP `connect-src`; no `.env.production` is committed. A rebuild without them shows "not connected". The published v2 bundle contains data source `api` and the production API origin in its CSP | Mechanism and v2 values verified; **where Maypop stores them is not visible** in its UI (gate 6 risk) |
+| Paid Nimble work is off unless configured | Round 2: the four paid budgets default to `0`; missing, blank or whitespace = `0` = no paid call (`apps/api/src/worker/config.ts`, tests in `apps/api/test/worker-config.test.ts` and `test/worker/zero-budgets.test.ts`). Production `verity-worker`: all four are explicitly `0`; `NIMBLE_MAX_EXTRACTS_PER_JOB=0`, `NIMBLE_MAX_SEARCHES_PER_JOB=1` | Verified 2026-10-18 (Railway dashboard). Re-check before each gate |
+| `MIGRATE_ON_START=true` would apply migrations when the API starts | `apps/api/src/server.ts`. Production `verity-api`: `MIGRATE_ON_START=false` | Verified 2026-10-18 (Railway dashboard). Re-check before gate 4 |
 
 ### Publication hold: split the release into two PRs
 
@@ -137,7 +137,10 @@ it only after the backup evidence below has been presented.
 
 Preconditions, all required:
 
-1. **A fresh, validated backup.** Take a `pg_dump` (custom format, `-Fc`)
+1. **A fresh, validated backup.** Procedure:
+   [BACKUP_RESTORE_PLAN.md](BACKUP_RESTORE_PLAN.md), approved separately with
+   "Approve production backup: read-only `pg_dump` of the Verity schemas, plus
+   a local restore validation." Take a `pg_dump` (custom format, `-Fc`)
    immediately before the migration window. Store it outside the repository and
    outside OneDrive. There are two levels of validation, and they prove
    different things:
@@ -212,9 +215,27 @@ Preconditions, all required:
    didn't take effect (`apps/api/src/db/migrate-runner.ts`). A lock wait or
    statement over its bound fails the migration transaction, which rolls back
    completely (proven on real PostgreSQL: `test/concurrency/migrate-gate.pg.test.ts`).
-   **Use a direct or session-mode connection** (Supabase pooler port 5432, or
-   the direct host), not the transaction-mode pooler (port 6543), which may not
-   keep session settings. The operator confirms which connection is used.
+   **Connection: the direct database host**, `db.<project ref>.supabase.co:5432`,
+   with user `postgres`, verified TLS (`VERITY_DB_CA_PATH` = the repo's
+   `apps/api/certs/prod-ca-2021.crt`) and `VERITY_DATABASE_ACK` set to that
+   host. Evidence, from a harmless probe on 2026-10-18 (connect, `SHOW`,
+   `SELECT 1` only):
+   - **Session pooler (the service's `DATABASE_URL`, port 5432): unusable as
+     is.** It drops startup parameters (lock timeout `0`, statement timeout
+     `2min`, `application_name` rewritten), so the migrator refuses (exit 2).
+     A session-level `SET` does hold on one pinned backend across
+     transactions. That fallback would need a code change, which was not
+     built because the direct host works.
+   - **Direct host:** DNS is IPv6-only. It was reachable from the operator
+     workstation over IPv6, TLS verified with the repo CA, authentication
+     worked, and **all three startup parameters were honored** (5s, 1min,
+     `verity-migrate`).
+   - **Not the transaction pooler** (port 6543).
+
+   **Run the migrator from an IPv6-capable machine.** A Railway service or an
+   IPv4-only network can't reach the direct host unless Supabase's IPv4
+   add-on is enabled. Before gate 2, re-check that the host is reachable from
+   the machine that will run it.
    Expected log lines: `Migration timeouts in effect: lock_timeout=5s
    statement_timeout=1min`, then `Migration session
    application_name=verity-migrate`. The second line is informational only. If
@@ -475,8 +496,8 @@ extraction slots are used) stays deferred.
 
 | Situation | Action | Schema |
 | --- | --- | --- |
-| Frontend misbehaves after gate 6 | With "Approve rollback of the frontend to `<build>`": republish the previous Maypop build, or revert PR B on `main`. Unpublishing the frontend first is always safe: old frontends never send a schedule | Keep 0006 |
-| API or worker fails after gate 4 | With "Approve rollback of the API and worker to `cc44449`": in Railway, redeploy the previous deployment (`cc44449`) for both services. If the new frontend is already live, schedule-bearing reports get the "doesn't accept scheduled times yet" message; everything else works | Keep 0006: the old code ignores `report_schedules` |
+| Frontend misbehaves after gate 6 | With "Approve rollback of the frontend to `<build>`". Old frontends never send a schedule, so going back is always schema-safe. **Known limits (2026-10-18):** Maypop's UI shows no published-version list with restore. The editor has an iteration history with Revert, but whether Revert plus publish restores v2 is unverified. The current v2's source is editor iteration 3 (`cc44449`'s `apps/web` plus an `env.ts` guard); a byte-exact copy of v2's files is kept locally as evidence, but it is incomplete (missing the Maypop SDK chunk) and its `index.html` holds Maypop's injections, so it must not be re-uploaded. The verified fallback is to republish a known source (`cc44449`'s `apps/web`, or PR B's previous head) through the same editor path; it is not byte-identical to v2. **Before gate 6, establish how Maypop restores a published version** | Keep 0006 |
+| API or worker fails after gate 4 | With "Approve rollback of the API and worker to `cc44449`": in Railway, redeploy the previous deployment (`cc44449`) for both services. This also brings back `cc44449`'s job over-claim defect, harmless while every paid budget is 0. If the new frontend is already live, schedule-bearing reports get the "doesn't accept scheduled times yet" message; everything else works | Keep 0006: the old code ignores `report_schedules` |
 | Bad data or migration problem | Stop and report. Restore from the gate 2 backup only with "Approve restore from the gate 2 backup." | — |
 
 Rollback restores compatible application builds and **retains 0006**.

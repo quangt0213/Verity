@@ -3,8 +3,8 @@
 | | |
 | --- | --- |
 | Owner | `layout` |
-| Branch | `team/layout-r3` (worktree `<worktrees>/layout-fixes`), from `be0e16b` (team/integration). Earlier rounds: `team/layout-r2`, `team/layout-fixes` |
-| Stage | REVIEW: round 3 (honest uncertain submit outcomes) done |
+| Branch | `team/layout-r4` (worktree `<worktrees>/layout-fixes`), from `d63c448`. Earlier rounds: `team/layout-r3`, `team/layout-r2`, `team/layout-fixes` |
+| Stage | REVIEW: round 4 (published v2 × candidate backend) done |
 | Last updated | 2026-10-18 |
 
 ## Goal
@@ -15,6 +15,94 @@ inside Maypop's cross-site iframe. Mobile overlays never cover each other or
 leave the screen, the sheet respects the safe area, and the desktop sidebar
 width adapts from 1024 px up. Follow-up: the feed stays cheap to render with
 500 events, and the report form's schedule fields match the rest of the form.
+
+## Published v2 frontend × candidate backend (round 4)
+
+The window between PR A (backend) and PR B (frontend): the **published Maypop
+v2** frontend stays live against the **candidate API** (`release/backend`
+`19db3e1`; its `apps/api`, `packages/contracts` and lockfile are identical to
+`d63c448`).
+
+**What v2 is.** The published static files (user-approved download, treated as
+untrusted and only served to a browser) aren't byte-identical to a local
+`cc44449` build with the same `VITE_VERITY_API_URL`. Comparing them:
+- **User-facing strings:** all 687 app strings match. The only extra strings in
+  the local build are inside the bundled Maypop SDK chunk, which v2 doesn't
+  carry.
+- **API surface:** every snake_case key and `/api/v1/*` path matches, with the
+  same counts.
+- **CSS:** a few extra utility classes and lab() rounding differences point to a
+  slightly different build toolchain.
+
+So v2 behaves as `cc44449`'s `apps/web` with the production API URL compiled in:
+- no schedule UI;
+- the CSP `connect-src` allows `'self'`, `*.maypop.ai`, the production API
+  origin and `tiles.openfreemap.org`;
+- Maypop's publish step injects inline activity/ambient scripts and
+  `html, body { overscroll-behavior: none }` ahead of the CSP meta.
+
+**Static analysis.**
+- **Requests:** v2 sends `POST /api/v1/reports` with only `category`, `title`,
+  optional `description`, `location {coordinates, label?}` and optional
+  `source_url`. It never sends `scheduled_*` or `observed_at`. Other endpoints:
+  events list/detail, `/me`, `/me/following`, signals, follow, auth email
+  start/verify, sign-out.
+- **Responses:** v2 parses them with the `cc44449` contracts: `z.object`
+  (unknown keys stripped) with strict enums, and strict `coordinates`.
+- **Contract diff:** between `cc44449` and `19db3e1` the response contracts
+  (event, evidence, timeline, status, category, community, signals, auth) are
+  **unchanged**. Only the report *input* gained optional `scheduled_*`, plus
+  limits and `foldDiacritics`. So the candidate API's responses validate under
+  v2's schemas, and v2's report bodies validate under the candidate's input
+  schema.
+
+**Run** (2026-10-18). Setup:
+- v2 served unmodified from `127.0.0.1:4389`.
+- The candidate API from this worktree on `127.0.0.1:4388`: PGlite, 15 demo
+  events seeded, all migrations including 0006.
+- Playwright (Chrome) `context.route()` answers every request to the production
+  API origin from the local API (`route.fetch` to a rewritten URL, then
+  `fulfill`), or synthetically for failure cases. **Nothing is continued to the
+  network.** Any other host except the app and the basemap is aborted (none
+  were).
+- No CSP violations: the requests still target the allowed origin.
+- A Verity session was obtained from the local API's dev outbox and placed in
+  localStorage, with no sign-in UI.
+- Scripts: `<scratchpad>/r4/v2-run.mjs`, `v2-reads.mjs` (not committed: they
+  depend on the downloaded artifact).
+
+| v2 × candidate API | Result | Evidence |
+| --- | --- | --- |
+| Map + events list | **VERIFIED** ✓ | map ready, 13 markers, "13 events in this area", 13 cards; `GET /api/v1/events` 200; no console errors |
+| Event detail | **VERIFIED** ✓ | title, "Why Verity says this", Sources, Timeline; `GET /api/v1/events/:id` 200; no "unexpected response" |
+| Report without a schedule | **VERIFIED** ✓ | body keys `category,location,title`; `POST` 201; navigated to the new event; toast "Report added as a community report, verification in progress." |
+| 400 in the service's format (`fields.title`) | **VERIFIED** (synthetic body) | title marked `aria-invalid`, input kept, 1 POST in 4 s |
+| Verity 500 | **VERIFIED** (synthetic) | alert "Verity is temporarily unavailable.", category/title/label kept, 1 POST in 4 s (no auto-resubmit) |
+| Proxy 502 (HTML) | **VERIFIED** (synthetic) | same as 500 |
+| Network failure | **VERIFIED** (aborted request) | same as 500 |
+| Committed, then the answer was lost (502), then the user resubmits | **VERIFIED** | both POSTs stored (201); the event shows 3 reports ("Similar community report attached" ×2), `independent_source_count` stays 1. v2 gives no hint that the first may have arrived |
+| Following / Settings (authenticated reads) | **VERIFIED** ✓ | `GET /me/following` 200 and the empty state; Settings shows the signed-in account |
+| Signals, follow (authenticated writes) | **UNVERIFIED** | skipped as instructed (they need auth); same contracts, so expected to work |
+| Candidate API **without** 0006 | **UNVERIFIED by run** | the local PGlite server always migrates. By code: `createReport` touches `report_schedules` only when `scheduled_start_at` is set, and v2 never sends it |
+| Worker-produced data (real verification, extended evidence) | **UNVERIFIED** | no worker locally; response contracts are identical, so v2's strict enums accept anything the candidate can emit |
+| Inside Maypop (iframe, SDK) | **UNVERIFIED** | run top-level; production observation is the lead's |
+
+**v2 behaviors that PR B fixes**, relevant while v2 stays live against the new
+API:
+- **Uncertain outcomes:** v2 says only "Verity is temporarily unavailable." on
+  500, 502 or a network error. It has no "couldn't confirm" wording and no
+  arrival check, so a resubmit after a lost answer adds a second report from the
+  same user (shown above). It attaches to the same event and doesn't raise
+  independence, but it's still a duplicate report.
+- **Input is kept** on every failure (verified). v2 **does not auto-resubmit**
+  (verified).
+- **Double submit:** v2 relies on the disabled button only (no in-flight
+  guard).
+- **A 400 whose only field key the form doesn't show** (`_` or another
+  unknown key) is silent in v2. v2's own bodies can't trigger one against the
+  candidate API: it sends only keys the candidate accepts.
+- **Layout:** the desktop blank-space bug and the mobile overlay issues remain
+  in v2 until PR B.
 
 ## Report submission across releases and failures (rounds 2–3)
 
@@ -352,6 +440,10 @@ The follow-up needs no MapShell change.
    would let the CSS stop overriding `left`/`right`.
 
 ## Remaining risks
+
+- Between PR A and PR B, v2 can create duplicate reports when an answer is
+  lost and the user resubmits (verified locally). They attach to the same event
+  and don't raise independence.
 
 - Reports: an unknown outcome can be a duplicate if the user resends without
   checking; the arrival check depends on the event list reflecting the write
