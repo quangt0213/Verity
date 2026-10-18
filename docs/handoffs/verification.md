@@ -1,10 +1,10 @@
 # Verification workstream handoff
 
-Owner: `verifier`. Current branch: `team/verification-r2` (worktree `<worktrees>/verification`), based on `team/integration` = `c0264c3` (the draft PR #7 head). Round 1 lives on `team/verification` (`c29fe40`, already integrated). Git, code and tests win over this file.
+Owner: `verifier`. Current branch: `team/verification-r3` (worktree `<worktrees>/verification`), based on `team/integration` = `be0e16b`. Round 1 (`team/verification`, `c29fe40`) and round 2 (`team/verification-r2`, `869b89b`, `dfef1b8`) are integrated. Git, code and tests win over this file.
 
 ## Status
 
-**REVIEW (round 2).** Paid Nimble work is now opt-in (all four budgets default to 0), and migration 0006 has regression coverage. Round 1 (A1–A6, V1, V3) is integrated. A5 and V2 remain recommendations; V2 stays deferred and its behavior is unchanged. Nothing was pushed, merged or deployed. No live Nimble, no production database.
+**REVIEW (round 3).** The migration runner now classifies failures into four outcomes with distinct messages and exit codes (see "Migration gate" below). Rounds 1 and 2 are integrated: paid Nimble work is opt-in (all budgets default to 0), and migration 0006 has regression coverage. A5 and V2 remain recommendations; V2 stays deferred and its behavior is unchanged. Nothing was pushed, merged or deployed. No live Nimble, no production database.
 
 **Migration `apps/api/drizzle/0006_report_schedules.sql`** (new table `report_schedules`, RLS on, client roles revoked) is unchanged in round 2. It has been tested on PGlite and on a throwaway local PostgreSQL 18, and never applied anywhere remote. Production must apply it before the new worker starts (the worker's readiness check requires it). The API keeps creating reports without it; only a report that includes a schedule fails, with a clean rollback and a generic 500.
 
@@ -44,7 +44,7 @@ How a budget of 0 behaves:
 - **One connection, bounded timeouts.** It uses one connection (`max: 1`), with `lock_timeout` and `statement_timeout` set as postgres.js startup parameters (`connection: {...}`). The server applies them to the session, and again on a reconnect.
 - **Settings.** `MIGRATE_LOCK_TIMEOUT_MS` (100..600000, default 5000) and `MIGRATE_STATEMENT_TIMEOUT_MS` (1000..3600000, default 60000). Blank means the default. 0 ("no limit") and out-of-range or non-integer values are refused, naming the variable, never the value.
 - **Read-back.** The effective values are read back with `SHOW` on the same connection and logged as values only (never the URL). If either differs from what was requested, the run is refused (`MigrationGateError`).
-- **On failure.** The script prints only the SQLSTATE and exits 1.
+- **On failure (round 3).** The script classifies the failure (see below). It prints only the outcome, a SQLSTATE or stable error-code name, and the next step.
 - **Embedded databases.** PGlite (development) migrates without timeouts; there are no other sessions.
 - **Unchanged.** The API and worker pools, `createDatabase().migrate()` and `MIGRATE_ON_START` are untouched. The only shared change is that `migrationsFolder()` is now exported.
 
@@ -52,6 +52,28 @@ How a budget of 0 behaves:
 - **Lock timeout.** Another session held `reports` in ACCESS EXCLUSIVE mode, and the migrator ran with a 500 ms lock timeout. 0006 failed with 55P03 (lock_not_available) within the bound, and afterwards there was no `report_schedules` table and still 6 history rows.
 - **Statement timeout.** A probe migration (create a table, then `pg_sleep(5)`) under a 1000 ms statement timeout failed with 57014, leaving no probe table and still 7 history rows.
 - **Read-back.** SHOW reported `5s/1min` for the defaults and `2s/30s` for explicit values.
+
+**Session name (round 3).** The migrator's single connection sets `application_name = 'verity-migrate'` (`MIGRATOR_APPLICATION_NAME`, a startup parameter alongside the timeouts); the API and worker pools keep the driver default `postgres.js`. It is read back with `SHOW application_name` and logged on its own line, for example `Migration session application_name=verity-migrate`, printed only if it looks like a name (otherwise `(other)`). It is NOT part of the safety gate: a pooler may rewrite it. The runbook's primary filter is `pg_stat_activity WHERE application_name = 'verity-migrate'`, with the query-text/locks query as the fallback when a pooler doesn't pass the name through. The real-PG test finds the blocked migrator by name, checks that the fallback finds the same pid, and checks that exactly one session carries the name.
+
+**Failure outcomes (round 3).** `classifyMigrationFailure(error, { started })` in `src/db/migrate-runner.ts` is pure and tested. `started` becomes true just before the drizzle migrator is invoked; `runMigrations` wraps every failure in `MigrationRunError` carrying it. An error from an unknown stage counts as started, so a rollback is never claimed without proof. Output never includes a URL, host, user, password or driver message: only a SQLSTATE (server errors, recognized by postgres.js's `PostgresError` severity) or a stable code name matching `^[A-Z][A-Z0-9_]{1,63}$`.
+
+| Exit | Outcome | When | Exact message |
+| --- | --- | --- | --- |
+| 0 | applied | success, or nothing pending | `Migrations applied.` (after `Migration timeouts in effect: lock_timeout=… statement_timeout=…`) |
+| 2 | refused, nothing attempted | invalid env (the next line names the variable), target guard (the next lines list the problems), missing CA (`DatabaseTlsError`) | `Migration refused: invalid or incomplete database configuration. Nothing was applied. Fix the configuration, then run again.` / `Migration refused: database target check failed. Nothing was applied.` |
+| 2 | refused, nothing attempted | the timeout safety check failed | `Migration refused: safety check failed (the connection did not keep the requested lock_timeout/statement_timeout). Nothing was applied. Use a direct or session-mode connection, then run again.` |
+| 3 | not attempted | connect, auth or TLS failure before migrations started (28000, 28P01, 3D000, ECONNREFUSED, a certificate error, CONNECT_TIMEOUT, …) | `Migration not attempted: could not connect to or authenticate with the database (<SQLSTATE x \| CODE>). Nothing was applied. Check the connection settings, then run again.` |
+| 4 | rolled back | the server returned a SQLSTATE after migrations started (55P03, 57014, 23xxx, 42xxx, 40P01, XX000, …) | `Migration failed: the server rejected a statement (SQLSTATE <x>). PostgreSQL rolled back the migration transaction; nothing from it was applied. Resolve the cause (for 55P03 or 57014, wait until the blocking session is gone), then run again.` |
+| 5 | UNKNOWN | after migrations started: transport errors (ECONNRESET, EPIPE, ETIMEDOUT, CONNECTION_CLOSED/ENDED/DESTROYED, TLS errors mid-run), session-ending SQLSTATEs (class 08, 57P01, 57P02, 57P03), or no code at all | `Migration outcome UNKNOWN: the connection failed while migrations were running (<SQLSTATE x \| CODE \| no error code>). Do not retry yet. Confirm the previous migration session has ended (pg_stat_activity), then inspect drizzle.__drizzle_migrations and the schema to see whether the migration was applied before deciding to run again.` |
+
+Notes:
+- **What "rolled back" covers.** It applies to the migration transaction. Drizzle's own bookkeeping (`CREATE SCHEMA/TABLE IF NOT EXISTS drizzle...`) runs before that transaction and may already exist, which is harmless.
+- **No automatic retry.** The script never retries.
+- **Proof on real PostgreSQL 18.6** (`test/concurrency/migrate-gate.pg.test.ts`):
+  - 55P03 and 57014 are classified as rolled back.
+  - A migrator blocked on a lock whose backend is terminated (`pg_terminate_backend`) is classified as UNKNOWN. postgres.js reported `CONNECTION_CLOSED`.
+  - A missing database is "not attempted" (3D000), and the message doesn't name the database.
+- **The built `dist/migrate.js`** was also run against the throwaway server, with the environment set inline (no `.env`): success exit 0, missing database exit 3 (3D000), refused port exit 3 (ECONNREFUSED), `MIGRATE_LOCK_TIMEOUT_MS=0` exit 2. The placeholder password in the URL never appeared.
 
 **Operator-confirm item (not guessed).** Supabase's transaction-mode pooler (port 6543) does not reliably keep session settings or startup parameters, because a transaction may run on a different server connection. The SHOW check catches a pooler that drops them, but it can't prove that every later transaction lands on the same backend. Run `db:migrate` over a direct connection, or a session-mode pooler (port 5432). The production URL wasn't inspected, and `.env` wasn't read.
 
@@ -61,7 +83,7 @@ How a budget of 0 behaves:
 - **ARCHITECTURE.md** (worker configuration): "Budgets default to 0 (paid work off). Operators opt in per kind, e.g. `NIMBLE_DAILY_SEARCH_BUDGET=200`, `NIMBLE_DAILY_EXTRACT_BUDGET=400`, `NIMBLE_DAILY_AGENT_BUDGET=20`, `NIMBLE_AGENT_MAX_PER_EVENT=2`. The worker's readiness check (`src/worker/schema-ready.ts`) proves only that the 0003–0006 tables exist, not that their constraints, grants or RLS are correct."
 - **WORKSTREAM_STATUS.md**: the deployment step "confirm all four budgets are explicitly 0" can become "confirm the four budget variables are unset, blank or 0 (all mean no paid calls)". The verification row should read: "round 2: zero-default budgets plus 0006 regression tests; REVIEW". Under "No budget default changed", note that the defaults are now 0.
 - **README.md** (line ~168, "defaults (`apps/api/.env.example` lists the budgets and limits)"): add "paid budgets default to 0 (off)".
-- **Runbook / WORKSTREAM_STATUS migration gate**: "`npm run db:migrate -w @verity/api` (or `node dist/migrate.js`) applies migrations on one connection with `lock_timeout` 5 s and `statement_timeout` 60 s by default (`MIGRATE_LOCK_TIMEOUT_MS`, `MIGRATE_STATEMENT_TIMEOUT_MS`). It logs the effective values and refuses to migrate if they don't match. Use a direct or session-mode connection (not Supabase's transaction-mode pooler on 6543). A timeout rolls the whole migration back; retry when the blocking session is gone."
+- **Runbook / WORKSTREAM_STATUS migration gate**: "`npm run db:migrate -w @verity/api` (or `node dist/migrate.js`) applies migrations on one connection with `lock_timeout` 5 s and `statement_timeout` 60 s by default (`MIGRATE_LOCK_TIMEOUT_MS`, `MIGRATE_STATEMENT_TIMEOUT_MS`). It logs the effective values and refuses to migrate if they don't match. Use a direct or session-mode connection (not Supabase's transaction-mode pooler on 6543). Read the exit code: 2 = refused and 3 = not attempted (nothing applied; fix and re-run); 4 = rolled back (re-run once the cause, e.g. a blocking session, is gone); 5 = outcome UNKNOWN (do not re-run until the previous session is confirmed gone in `pg_stat_activity` and `drizzle.__drizzle_migrations` and the schema have been inspected)." The exact messages are in the round 3 table above; `map-perf` has them for the runbook.
 
 ## Goal
 
@@ -79,6 +101,7 @@ Stop named planned events from being "supported" by unrelated material. The firs
   - `src/worker/schema-ready.ts` (new) and `src/worker/main.ts`;
   - `apps/api/.env.example`;
   - migration gate: `src/db/migrate-runner.ts` (new), `src/scripts/migrate.ts`, `src/db/client.ts` (`migrationsFolder` exported), `test/migrate-runner.test.ts` (new), `test/concurrency/migrate-gate.pg.test.ts` (new);
+- Round 3: failure classification in `src/db/migrate-runner.ts` (`MigrationRunError`, `classifyMigrationFailure`, `failureCodes`, `MIGRATION_EXIT_CODES`) and `src/scripts/migrate.ts`; tests in `test/migrate-runner.test.ts` and `test/concurrency/migrate-gate.pg.test.ts`.
   - tests: `test/worker-config.test.ts`, `test/worker/harness.ts` (`TEST_BUDGET_ENV`, `defaultBudgetConfig`), `test/worker/zero-budgets.test.ts` (new), `test/migration-0006.test.ts` (new), `test/migration-helpers.ts` (new), `test/helpers.ts` (a `migrate` override for partial-schema contexts).
 - Tests: `apps/api/test/fixtures/dia-san-jose.ts` (RECONSTRUCTED, labelled in its header), `test/verification/identity.test.ts`, `test/verification/rules-edge.test.ts`, `test/providers/nimble-query-named.test.ts`, `test/worker/named-event.test.ts`, `test/worker/sweep-starvation.test.ts`, `test/report-schedule.test.ts`; updated `test/migrations.test.ts`, `test/database-access.test.ts`, `test/worker/harness.ts`, contracts tests, `apps/web/src/api/mock/mock-client.test.ts`; new spec `apps/web/e2e/report-schedule.spec.ts`.
 
@@ -124,9 +147,23 @@ Option 1 is the only one that makes the paid run useful without weakening the de
 ## Commits
 
 - Round 1 (`team/verification`): `5628f41`, `a5e53aa`, `62f47b6`, `7df1c8a`, `c29fe40`.
-- Round 2 (`team/verification-r2`): one commit on top of `c0264c3`; see `git log --oneline c0264c3..team/verification-r2`.
+- Round 2 (`team/verification-r2`): `869b89b`, `dfef1b8` on top of `c0264c3` (integrated).
+- Round 3 (`team/verification-r3`): one commit on top of `be0e16b`; see `git log --oneline be0e16b..team/verification-r3`.
 
 ## Tests actually run
+
+Round 3 (2026-10-18, on `team/verification-r3`):
+- `npm run check` at the root: pass. Contracts 58; API 731 passed + 19 skipped (49 files, 3 skipped: the real-PG suites); web 132; bundle secret scan passed. One earlier run failed only on a timing flake in the layout-owned `apps/web/src/features/events/FeedPanel.test.tsx` (5.6 s against its 5 s limit, under load). It passes alone 3 of 3 times (4.5–5.8 s), and the full re-run passed. No web file changed in round 3.
+- `test/db-tls.test.ts`: the migrate-script refusal cases now expect exit 2 and the "Migration refused: …" headline (they previously pinned exit 1).
+- `test/migrate-runner.test.ts`: 44 passed (every class, its exact wording, exit codes, and no secret from a fake error message in the output).
+- `TEST_DATABASE_URL=postgres://verity_test@127.0.0.1:55432/postgres npm run test:concurrency -w @verity/api`: 19/19 passed (3 files; the gate tests now include rolled-back 55P03/57014, UNKNOWN from a terminated backend, and not-attempted 3D000). It ran on a throwaway PostgreSQL 18.6 cluster in the scratchpad, which was stopped and deleted afterwards.
+- `node dist/migrate.js` against that cluster, with the environment inline: exits 0, 3, 3 and 2 as described above.
+- Not run: Playwright (no web change) and `test:e2e:service`.
+- Second commit (`application_name`):
+  - `test/migrate-runner.test.ts`: 46 passed.
+  - `test:concurrency` on a fresh throwaway cluster (stopped and deleted afterwards): 19/19 in most runs.
+  - Pre-existing flake: in 3 of 11 full-directory runs, `test/concurrency/worker.pg.test.ts:252` failed ("runs two workers end to end …": a NEW_REPORT job not `succeeded` with exactly 1 attempt). It reproduced WITHOUT the change (1 of 5 runs at `b0502e3`), never failed when that file ran alone (6/6), and touches no migrator code. It's reported, not fixed (see risks).
+  - `npm run check`: pass. Contracts 58; API 733 passed + 19 skipped; web 132; bundle secret scan passed.
 
 Round 2 (2026-10-17, on `team/verification-r2`):
 - `npm run check` at the root: pass. Contracts 54; API 687 passed + 13 skipped (47 files, 2 skipped: the real-PostgreSQL suites); web 123; bundle secret scan passed.
@@ -159,6 +196,11 @@ Round 1 (2026-10-17):
 - Turning the budgets on is a cost decision for the user. Opting in to search alone gives search only (no page reads, no Agent).
 - The readiness check is presence-only (see round 2 above).
 - The migration gate's mismatch refusal is unit-tested (`timeoutsInEffect`), not exercised against a real pooler. Whether production's migration URL is direct or session-mode is for the operator to confirm.
+- Failure classification depends on postgres.js error shapes: `PostgresError` with `severity` for server errors, and string `code`s for transport errors. A driver upgrade that changes them would degrade toward UNKNOWN (the safe direction), never toward a false "rolled back". The unit tests pin the shapes.
+- A server SQLSTATE returned in reply to COMMIT itself (for example, a deferred constraint) is classified as rolled back, which is what PostgreSQL does. A lost connection around COMMIT is UNKNOWN.
+- `FeedPanel.test.tsx` (layout-owned) runs close to its 5 s timeout and can fail under load. Suggest raising that test's timeout or splitting it.
+- `test/concurrency/worker.pg.test.ts` "runs two workers end to end" is intermittent when the three real-PG files run in parallel on one server (line 252: a NEW_REPORT job not `succeeded`/1 attempt). It predates round 3. Likely contention, e.g. a slow attempt being reaped or retried under the fake clock. It needs investigation in a future round. It never failed when run alone.
+- Exit codes changed from a single 1 to 2–5. Anything that checks only for non-zero is unaffected; anything that matched exit 1 must be updated (the runbook).
 - The 60 s statement default bounds each statement, not the whole run. A large future data migration may need an explicit higher `MIGRATE_STATEMENT_TIMEOUT_MS`.
 - The 0006 privilege and RLS checks run on PGlite with Supabase-like roles. The real-PostgreSQL suite checks that 0000–0006 apply and that RLS is on for `report_schedules`, but it does not repeat the client-role privilege matrix.
 
@@ -179,6 +221,6 @@ Round 1 (2026-10-17):
 
 ## Exact resumption steps
 
-1. `cd <worktrees>/verification && git switch team/verification-r2 && git log --oneline c0264c3..HEAD`.
+1. `cd <worktrees>/verification && git switch team/verification-r3 && git log --oneline be0e16b..HEAD`.
 2. `npm run check` at the worktree root. For UI changes, take the e2e lock and run `PW_CHANNEL=chrome npm run test:e2e` in `apps/web`.
 3. Open items: A5 option (b/c) and V2 option 1 are both small and behind flags; implement only after the decisions above.
