@@ -75,7 +75,7 @@ migrated or deployed; PR #7 is still a draft at `c0264c3`.
 | Gates 2 and 3 rehearsal (built `dist/migrate.js`, Supabase-like roles) | Pass; details in the runbook |
 | `PW_CHANNEL=chrome npx playwright test` | 57 passed, 21 skipped (viewport-specific) |
 | `PW_CHANNEL=chrome npm run test:e2e:service` | 2 passed |
-| PR A tree (`apps/web` as at `cc44449`): `npm run check` | See "Proposed PR changes" |
+| PR A tree (`release/backend`, `apps/web` as at `cc44449`) | `npm run check` pass: 58 contracts, 701 API (17 skipped), 89 web (the `cc44449` web suite). Playwright 27 passed, 1 skipped. Service e2e 2 passed: the live frontend's code signs in, reports, signals and follows against the new API through a cross-site iframe |
 | Not run | San Jose acceptance (no map or build change); real devices; the old API build; anything in production; any live Nimble call |
 
 ### Proposed PR changes (not pushed)
