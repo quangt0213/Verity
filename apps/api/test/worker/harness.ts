@@ -178,9 +178,13 @@ export async function newEvent(
 
 /** Claim the (only) ready job for an event. */
 export async function claimFor(ctx: TestContext, clock: FakeClock, eventId: string, workerId = "w_test"): Promise<Lease> {
-  // Make only this event's job ready, so concurrently created jobs don't interfere.
-  await ctx.db.execute(sql`update verification_jobs set available_at = ${clock.now()} where event_id = ${eventId} and status = 'pending' and available_at <= ${clock.now()}`);
-  const leases = await claimJobs(ctx.db, { workerId, limit: 50, now: clock.now() });
+  // Make this event's job the OLDEST ready one (claims go oldest first and never exceed their limit),
+  // so other tests' leftover ready jobs in the same database can't get in the way.
+  await ctx.db.execute(sql`
+    update verification_jobs
+       set available_at = least(${clock.now()}::timestamptz, (select min(available_at) from verification_jobs where status = 'pending') - interval '1 second')
+     where event_id = ${eventId} and status = 'pending' and available_at <= ${clock.now()}`);
+  const leases = await claimJobs(ctx.db, { workerId, limit: 1, now: clock.now() });
   const lease = leases.find((l) => l.eventId === eventId);
   // Release unrelated claims back to pending.
   for (const other of leases.filter((l) => l.eventId !== eventId)) {
