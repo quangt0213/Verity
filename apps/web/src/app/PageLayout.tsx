@@ -9,7 +9,7 @@ export function PageLayout({ title, description, children }: { title: string; de
     <div className="flex h-full flex-col">
       <TopBar />
       <DataSourceBanner />
-      <main className="relative min-h-0 flex-1 overflow-y-auto">
+      <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl px-4 pt-4 pb-16">
           <Link to="/map" className="-ml-2 inline-flex h-10 items-center gap-1 rounded-xl px-2 text-sm font-medium text-muted hover:bg-surface-2 hover:text-fg">
             <Icon icon={ChevronLeft} size={18} />

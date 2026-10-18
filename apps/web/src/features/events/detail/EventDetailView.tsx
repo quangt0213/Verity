@@ -62,7 +62,7 @@ export function EventDetailView({ event, now }: { event: EventDetail; now: numbe
   }, [event.id]);
 
   return (
-    <article className="relative space-y-6 px-4 pt-3 pb-8">
+    <article className="space-y-6 px-4 pt-3 pb-8">
       <header>
         <div className="flex items-center justify-between gap-2">
           <Link to="/map" className="-ml-2 inline-flex h-10 items-center gap-1 rounded-xl px-2 text-sm font-medium text-muted hover:bg-surface-2 hover:text-fg">

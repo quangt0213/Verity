@@ -9,8 +9,7 @@ export interface ShellContext {
   events: EventSummary[];
   list: {
     isPending: boolean;
-    /** Unused by the outlets; optional so MapShell can stop passing it (re-renders the feed on every fetch). */
-    isFetching?: boolean;
+    isFetching: boolean;
     error: unknown;
     truncated: boolean;
     refetch: () => void;

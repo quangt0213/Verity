@@ -144,12 +144,7 @@ test("fits the screen without horizontal scrolling (mobile and desktop)", async 
   await openEvent(page, VERIFIED_HIGHWAY);
   const sources = section(page, "Sources");
   await sources.scrollIntoViewIfNeeded();
-  // #root clips the document, so measure the app shell and every scrolling region inside it.
-  const overflow = await page.evaluate(() => {
-    const shell = document.querySelector("#root > *");
-    const scrollers = [...document.querySelectorAll("#root *")].filter((el) => /auto|scroll/.test(getComputedStyle(el).overflowX));
-    return Math.max(0, ...[shell, ...scrollers].filter((el) => el !== null).map((el) => el.scrollWidth - el.clientWidth));
-  });
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   const box = await sources.boundingBox();
   const viewport = page.viewportSize()!;

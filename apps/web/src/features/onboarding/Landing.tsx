@@ -44,7 +44,7 @@ export function Landing() {
   };
 
   return (
-    <main className="relative h-full overflow-y-auto bg-bg">
+    <main className="min-h-full overflow-y-auto bg-bg">
       <div className="mx-auto flex min-h-full max-w-xl flex-col px-5 pt-6 pb-10" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1.5rem)" }}>
         <Logo />
         <div className="mt-10 sm:mt-16">

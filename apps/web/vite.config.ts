@@ -2,13 +2,12 @@ import { maypop } from "@basilica-digital/maypop-sdk/vite";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv, type PluginOption } from "vite";
-import { cspMetaPlugin, mapPreconnectPlugin, publicEnvGuard } from "./build/plugins.ts";
+import { cspMetaPlugin, publicEnvGuard } from "./build/plugins.ts";
 import { DEFAULT_MAP_STYLE_DARK, DEFAULT_MAP_STYLE_LIGHT } from "./src/config/defaults.ts";
 
 export default defineConfig(({ mode }) => {
   // Only VITE_* values are loaded here; they are public by definition.
   const env = loadEnv(mode, process.cwd(), "VITE_");
-  const mapStyleUrls = [env.VITE_MAP_STYLE_URL_LIGHT || DEFAULT_MAP_STYLE_LIGHT, env.VITE_MAP_STYLE_URL_DARK || DEFAULT_MAP_STYLE_DARK];
 
   const plugins: PluginOption[] = [
     publicEnvGuard(env),
@@ -17,7 +16,10 @@ export default defineConfig(({ mode }) => {
     cspMetaPlugin(
       {
         apiUrl: env.VITE_VERITY_API_URL,
-        mapStyleUrls,
+        mapStyleUrls: [
+          env.VITE_MAP_STYLE_URL_LIGHT || DEFAULT_MAP_STYLE_LIGHT,
+          env.VITE_MAP_STYLE_URL_DARK || DEFAULT_MAP_STYLE_DARK,
+        ],
         extraMapOrigins: (env.VITE_MAP_EXTRA_ORIGINS ?? "")
           .split(",")
           .map((s) => s.trim())
@@ -25,7 +27,6 @@ export default defineConfig(({ mode }) => {
       },
       env.VITE_META_CSP !== "off",
     ),
-    mapPreconnectPlugin(mapStyleUrls),
   ];
 
   // Local Maypop host for `vite dev`: serves the app inside a sandbox host with

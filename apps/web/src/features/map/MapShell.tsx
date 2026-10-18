@@ -1,6 +1,6 @@
 import type { Coordinates } from "@verity/contracts";
 import { LocateFixed, Plus } from "lucide";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Outlet, useLocation, useMatch, useNavigate } from "react-router";
 import { DataSourceBanner, TopBar } from "../../app/TopBar";
 import { Icon } from "../../components/ui/Icon";
@@ -100,28 +100,26 @@ export function MapShell() {
     }
   };
 
-  const listPending = query !== null && list.isPending;
-  const { error: listError, refetch } = list;
-  const truncated = list.data?.truncated ?? false;
-  // Stable unless something the outlet shows changes: background refetches,
-  // sheet drags, viewport reports and fly targets don't re-render the feed.
-  const context = useMemo<ShellContext>(
-    () => ({
-      events,
-      list: { isPending: listPending, error: listError, truncated, refetch: () => void refetch() },
-      zoomedOut,
-      mapStatus,
-      filters,
-      setFilters,
-      highlightedId,
-      setHighlightedId,
-      focusOn,
-      setSheet,
-      isDesktop,
-      now,
-    }),
-    [events, listPending, listError, truncated, refetch, zoomedOut, mapStatus, filters, setFilters, highlightedId, focusOn, isDesktop, now],
-  );
+  const context: ShellContext = {
+    events,
+    list: {
+      isPending: query !== null && list.isPending,
+      isFetching: list.isFetching,
+      error: list.error,
+      truncated: list.data?.truncated ?? false,
+      refetch: () => void list.refetch(),
+    },
+    zoomedOut,
+    mapStatus,
+    filters,
+    setFilters,
+    highlightedId,
+    setHighlightedId,
+    focusOn,
+    setSheet,
+    isDesktop,
+    now,
+  };
 
   const search = {
     value: searchInput,
@@ -132,8 +130,6 @@ export function MapShell() {
   };
 
   const mapBottomInset = isDesktop ? 0 : sheetPx;
-  // The preview takes the Report button's place, and a full sheet covers the map it reports on.
-  const showReport = !isDesktop && !routeEventId && !preview && sheet !== "full";
   const heading = feedHeading(events.length, zoomedOut, context.list.isPending);
 
   return (
@@ -142,17 +138,12 @@ export function MapShell() {
       <DataSourceBanner />
       <div className="relative flex min-h-0 flex-1">
         {isDesktop && (
-          <aside className="relative w-[clamp(360px,30vw,440px)] shrink-0 overflow-y-auto overscroll-contain border-r border-line bg-bg" aria-label="Events">
+          <aside className="w-[400px] shrink-0 overflow-y-auto border-r border-line bg-bg" aria-label="Events">
             <Outlet context={context} />
           </aside>
         )}
 
-        <div
-          className="relative min-w-0 flex-1"
-          // Mobile: lifts MapLibre's bottom controls (the attribution) above the sheet; see index.css.
-          data-sheet-inset={isDesktop ? undefined : showReport ? "with-report" : ""}
-          style={isDesktop ? undefined : ({ "--sheet-inset": `${sheetPx}px` } as CSSProperties)}
-        >
+        <div className="relative min-w-0 flex-1">
           <MapView
             events={events}
             selectedId={selectedId}
@@ -173,12 +164,10 @@ export function MapShell() {
               type="button"
               onClick={nearMe}
               disabled={locating}
-              aria-label={locating ? "Locating…" : "Near me"}
               className="pointer-events-auto inline-flex h-11 items-center gap-1.5 rounded-xl bg-surface/95 px-3 text-sm font-medium shadow-md ring-1 ring-line backdrop-blur hover:bg-surface disabled:opacity-60"
             >
               <Icon icon={LocateFixed} size={17} className={locating ? "animate-pulse" : undefined} />
-              {/* Icon only on the narrowest phones, so the "Zoom in" hint fits between the corner controls. */}
-              <span className="hidden min-[390px]:inline">{locating ? "Locating…" : "Near me"}</span>
+              {locating ? "Locating…" : "Near me"}
             </button>
             {mapStatus === "ready" && <MapLegend />}
           </div>
@@ -189,21 +178,20 @@ export function MapShell() {
             </div>
           )}
 
-          {/* On mobile the preview sits above the sheet; a full sheet leaves no room for it. */}
-          {preview && (isDesktop || sheet !== "full") && (
+          {preview && (
             <div
-              className="pointer-events-none absolute inset-x-3 z-30 flex justify-center transition-[bottom] duration-200 ease-out motion-reduce:transition-none lg:inset-x-auto lg:bottom-6 lg:left-6 lg:w-[380px]"
+              className="pointer-events-none absolute inset-x-3 z-30 flex justify-center lg:inset-x-auto lg:bottom-6 lg:left-6 lg:w-[380px]"
               style={isDesktop ? undefined : { bottom: sheetPx + 12 }}
             >
               <EventPreview event={preview} now={now} onClose={() => setPreviewId(null)} />
             </div>
           )}
 
-          {showReport && (
+          {!isDesktop && !routeEventId && (
             <Link
               to="/report"
               state={viewport ? { center: viewport.center } : null}
-              className="absolute right-4 z-20 inline-flex h-14 items-center gap-2 rounded-full bg-accent px-5 font-semibold text-accent-fg shadow-lg transition-[bottom] duration-200 ease-out hover:brightness-110 motion-reduce:transition-none"
+              className="absolute right-4 z-20 inline-flex h-14 items-center gap-2 rounded-full bg-accent px-5 font-semibold text-accent-fg shadow-lg hover:brightness-110"
               style={{ bottom: sheetPx + 16 }}
               aria-label="Report an event"
             >

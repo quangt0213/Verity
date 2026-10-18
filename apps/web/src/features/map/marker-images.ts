@@ -1,8 +1,6 @@
 import type { EventCategory } from "@verity/contracts";
 import type { IconNode } from "lucide";
-import type { Map as MapLibreMap } from "maplibre-gl";
 import { CATEGORY_DISPLAY, MARKER_GROUPS, type MarkerGroup } from "../../lib/display";
-import { POI_KINDS, poiColors, type PoiKind } from "./basemap-detail";
 import type { MapTheme } from "./map-layers";
 
 export interface RasterImage {
@@ -139,38 +137,14 @@ export function createClusterImage(urgent: boolean, label: string, theme: MapThe
   return toRaster(ctx);
 }
 
-/**
- * Basemap place-of-interest icon: a small muted disc with a white glyph. Much
- * smaller than event markers and without their shadow, so events stay dominant.
- */
-export function createPoiImage(kind: PoiKind, theme: MapTheme, pixelRatio: number): RasterImage | null {
-  const size = 18;
-  const ctx = canvas(size, pixelRatio);
-  if (!ctx) return null;
-  const c = size / 2;
-  ctx.beginPath();
-  ctx.arc(c, c, 7.5, 0, Math.PI * 2);
-  ctx.fillStyle = poiColors(kind).icon;
-  ctx.fill();
-  ctx.lineWidth = 1.25;
-  ctx.strokeStyle = SURFACE[theme];
-  ctx.stroke();
-  drawIcon(ctx, POI_KINDS[kind].icon, c, c, 9.5, "#ffffff");
-  return toRaster(ctx);
-}
-
-/** Parse ids produced by markerImageId / clusterImageId / poiImageId; returns null for anything else. */
+/** Parse ids produced by markerImageId / clusterImageId; returns null for anything else. */
 export function parseImageId(
   id: string,
 ):
   | { kind: "marker"; group: MarkerGroup; category: EventCategory; theme: MapTheme }
   | { kind: "cluster"; urgent: boolean; label: string; theme: MapTheme }
-  | { kind: "poi"; poi: PoiKind; theme: MapTheme }
   | null {
   const parts = id.split(":");
-  if (parts[0] === "vp" && parts.length === 3 && (parts[2] === "light" || parts[2] === "dark") && Object.hasOwn(POI_KINDS, parts[1]!)) {
-    return { kind: "poi", poi: parts[1] as PoiKind, theme: parts[2] };
-  }
   const theme = parts[3];
   if (theme !== "light" && theme !== "dark") return null;
   if (parts[0] === "vm" && parts[1] && parts[2] && parts[1] in MARKER_GROUPS && parts[2] in CATEGORY_DISPLAY) {
@@ -180,21 +154,4 @@ export function parseImageId(
     return { kind: "cluster", urgent: parts[1] === "1", label: parts[2], theme };
   }
   return null;
-}
-
-const pixelRatio = () => Math.min(3, Math.max(1, window.devicePixelRatio || 1));
-
-/** Missing-image resolver: draws Verity's marker, cluster and POI images on first use. */
-export function resolveVerityImage(map: Pick<MapLibreMap, "hasImage" | "addImage">, id: string) {
-  if (map.hasImage(id)) return;
-  const parsed = parseImageId(id);
-  if (!parsed) return;
-  const pr = pixelRatio();
-  const image =
-    parsed.kind === "marker"
-      ? createMarkerImage(parsed.group, parsed.category, parsed.theme, pr)
-      : parsed.kind === "cluster"
-        ? createClusterImage(parsed.urgent, parsed.label, parsed.theme, pr)
-        : createPoiImage(parsed.poi, parsed.theme, pr);
-  if (image) map.addImage(id, image, { pixelRatio: pr });
 }
