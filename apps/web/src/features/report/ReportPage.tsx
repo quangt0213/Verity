@@ -8,7 +8,7 @@ import {
   type EventCategory,
 } from "@verity/contracts";
 import { Info } from "lucide";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useApi } from "../../api/ApiProvider";
 import { Card, PageLayout } from "../../app/PageLayout";
@@ -32,6 +32,15 @@ function localToIso(value: string): string | undefined {
   if (!value) return undefined;
   const at = new Date(value);
   return Number.isNaN(at.getTime()) ? value : at.toISOString();
+}
+
+/** The reporter's time zone in words ("Pacific Daylight Time"), since the schedule fields are local times. */
+function localTimeZoneName(): string | null {
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZoneName: "long" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value ?? null;
+  } catch {
+    return null;
+  }
 }
 
 const inputClass =
@@ -64,6 +73,20 @@ export function ReportPage() {
   const [coordinates, setCoordinates] = useState<Coordinates>(approximateCoordinates(startCenter));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const focusFirstError = useRef(false);
+  const [timeZone] = useState(localTimeZoneName);
+
+  // After a failed submit, move focus to the first field that needs attention.
+  useEffect(() => {
+    if (!focusFirstError.current) return;
+    focusFirstError.current = false;
+    const form = formRef.current;
+    const target = errors.category
+      ? form?.querySelector<HTMLElement>('input[name="category"]')
+      : form?.querySelector<HTMLElement>('[aria-invalid="true"]');
+    target?.focus();
+  }, [errors]);
 
   const policy = api.writePolicy;
   const { session } = useAuth();
@@ -94,6 +117,7 @@ export function ReportPage() {
         const key = String(issue.path[0] ?? "form") as keyof FieldErrors;
         next[key] ??= key === "category" ? "Choose a category" : issue.message;
       }
+      focusFirstError.current = true;
       setErrors(next);
       return;
     }
@@ -111,6 +135,7 @@ export function ReportPage() {
         for (const [key, message] of Object.entries(result.error.fields)) {
           next[(key.split(".")[0] ?? "form") as keyof FieldErrors] ??= message;
         }
+        focusFirstError.current = true;
         setErrors(next);
       } else {
         setErrors({ form: result.error.message });
@@ -148,7 +173,7 @@ export function ReportPage() {
         </div>
       )}
 
-      <form onSubmit={onSubmit} noValidate className="space-y-4">
+      <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-4">
         <Card>
           <fieldset aria-describedby={errors.category ? "category-error" : undefined}>
             <legend className="text-sm font-semibold">What's happening?</legend>
@@ -236,6 +261,7 @@ export function ReportPage() {
               </legend>
               <p id="schedule-help" className="mt-1 text-xs text-muted">
                 If you know the schedule, Verity uses it to find this event. A schedule shows it's planned, not that it's happening.
+                {timeZone && ` Times are in your time zone (${timeZone}).`}
               </p>
               <div className="mt-2 grid gap-3 sm:grid-cols-2">
                 <div>

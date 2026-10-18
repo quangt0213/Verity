@@ -95,6 +95,25 @@
   input[type="search"]::-webkit-search-cancel-button {
     cursor: pointer;
   }
+
+  input[type="datetime-local"] {
+    min-width: 0;
+  }
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+  }
+
+  /* iOS Safari: date inputs otherwise ignore width: 100%, collapse when empty and center their value. */
+  @supports (-webkit-touch-callout: none) {
+    input[type="datetime-local"] {
+      -webkit-appearance: none;
+      appearance: none;
+      display: block;
+    }
+    input[type="datetime-local"]::-webkit-date-and-time-value {
+      text-align: left;
+    }
+  }
 }
 
 /* Skeleton shimmer for loading states. */
