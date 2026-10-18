@@ -1,5 +1,7 @@
 import { MapPin, ZoomIn } from "lucide";
+import { useEffect, useRef, useState } from "react";
 import { userMessageFor } from "../../api/errors";
+import { Button } from "../../components/ui/Button";
 import { EmptyState, ErrorState, EventCardSkeleton } from "../../components/ui/States";
 import { cn } from "../../lib/cn";
 import { useShell } from "../map/shell-context";
@@ -57,9 +59,30 @@ export function feedHeading(count: number, zoomedOut: boolean, pending: boolean)
   return count === 1 ? "1 event in this area" : `${count} events in this area`;
 }
 
+/** Cards rendered at first and per "Show more"; the map still shows every event. */
+export const FEED_PAGE_SIZE = 50;
+
 /** The list of events in the current map viewport. */
 export function FeedPanel() {
   const { events, list, zoomedOut, now, highlightedId, setHighlightedId, filters, setFilters } = useShell();
+  const [limit, setLimit] = useState(FEED_PAGE_SIZE);
+  const listRef = useRef<HTMLUListElement>(null);
+  const focusIndex = useRef<number | null>(null);
+
+  // A new filter starts a new list; panning keeps whatever the reader expanded.
+  const filterKey = `${filters.kind}|${filters.showEnded}|${filters.q}`;
+  const [previousFilterKey, setPreviousFilterKey] = useState(filterKey);
+  if (previousFilterKey !== filterKey) {
+    setPreviousFilterKey(filterKey);
+    setLimit(FEED_PAGE_SIZE);
+  }
+
+  // After "Show more", keyboard focus moves to the first card that just appeared.
+  useEffect(() => {
+    if (focusIndex.current === null) return;
+    listRef.current?.querySelectorAll<HTMLElement>(":scope > li > a")[focusIndex.current]?.focus();
+    focusIndex.current = null;
+  }, [limit]);
 
   let body;
   if (zoomedOut) {
@@ -91,13 +114,31 @@ export function FeedPanel() {
       </EmptyState>
     );
   } else {
+    const shown = events.length > limit ? events.slice(0, limit) : events;
+    const remaining = events.length - shown.length;
     body = (
-      <ul className="space-y-2.5">
-        {events.map((event) => (
+      <ul ref={listRef} className="space-y-2.5">
+        {shown.map((event) => (
           <li key={event.id}>
             <EventCard event={event} now={now} selected={event.id === highlightedId} onHover={setHighlightedId} />
           </li>
         ))}
+        {remaining > 0 && (
+          <li className="flex flex-col items-center gap-1.5 pt-1">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                focusIndex.current = shown.length;
+                setLimit(shown.length + FEED_PAGE_SIZE);
+              }}
+            >
+              Show {Math.min(FEED_PAGE_SIZE, remaining)} more
+            </Button>
+            <p className="text-xs text-muted" role="status">
+              Showing {shown.length} of {events.length}
+            </p>
+          </li>
+        )}
         {list.truncated && <li className="py-2 text-center text-xs text-muted">More events match. Zoom in to see them all.</li>}
       </ul>
     );
