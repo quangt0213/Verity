@@ -26,9 +26,25 @@ export class FakeClock {
 
 export const silentLog: WorkerLog = { info: () => {}, warn: () => {}, error: () => {} };
 
+/**
+ * Paid work is opt-in (budgets default to 0), so the worker tests opt in
+ * explicitly, the way an operator would. Providers are fakes or mocked HTTP.
+ */
+export const TEST_BUDGET_ENV = {
+  NIMBLE_DAILY_SEARCH_BUDGET: "200",
+  NIMBLE_DAILY_EXTRACT_BUDGET: "400",
+  NIMBLE_DAILY_AGENT_BUDGET: "20",
+  NIMBLE_AGENT_MAX_PER_EVENT: "2",
+} as const;
+
 export function testConfig(nimble: Partial<WorkerConfig["nimble"]> = {}, rest: Partial<WorkerConfig> = {}): WorkerConfig {
-  const base = loadWorkerConfig({ NODE_ENV: "test", NIMBLE_API_KEY: "fake-key-for-tests" });
+  const base = loadWorkerConfig({ NODE_ENV: "test", NIMBLE_API_KEY: "fake-key-for-tests", ...TEST_BUDGET_ENV });
   return { ...base, ...rest, nimble: { ...base.nimble, ...nimble } };
+}
+
+/** The worker exactly as configured when no budget variable is set (all paid work off). */
+export function defaultBudgetConfig(rest: Partial<WorkerConfig> = {}): WorkerConfig {
+  return { ...loadWorkerConfig({ NODE_ENV: "test", NIMBLE_API_KEY: "fake-key-for-tests" }), ...rest };
 }
 
 export type RetrieverScript = (call: number) => RetrievalResult | Promise<RetrievalResult>;
