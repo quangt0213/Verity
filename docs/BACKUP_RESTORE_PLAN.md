@@ -13,150 +13,138 @@ except under "Approve restore from the gate 2 backup."
 
 Git, code and tests win over this file. If they disagree, fix this file.
 
-## What is backed up
+## Scope
 
-- **Schemas:** `public` (the 15 Verity tables, the `verity_*` functions and
-  their 3 triggers, RLS settings) and `drizzle` (the migration history). That
-  is everything Verity's migrations create (`apps/api/drizzle/0000–0005`).
-  Verity uses no extensions and no Supabase-managed schemas (`auth`, `storage`,
-  `vault` and so on). Its own auth tables live in `public`.
-- **Format:** custom (`-Fc`): compressed, checksummable, and restorable table
-  by table with `pg_restore`.
-- **Not included:** roles, Supabase platform schemas and Supabase's own
-  backups. Supabase's platform backups, where the plan has them, are an
-  independent fallback. Check them in the Supabase dashboard; this plan
-  doesn't rely on them.
+**Verity application backup (schemas `public` + `drizzle`). Not a complete
+Supabase project backup.**
+
+- **Included:**
+  - `public`: the 15 Verity tables, the 2 `verity_*` functions, their 3 triggers, constraints, indexes, RLS settings, object owners and ACLs, and the schema's default privileges;
+  - `drizzle`: the migration history.
+  That is everything Verity's migrations create (`apps/api/drizzle/0000–0005`). Verity's own auth tables live in `public`.
+- **Excluded:**
+  - Supabase platform schemas (`auth`, `storage`, `vault`, `realtime`, `extensions` and others);
+  - roles and their passwords (a dump only refers to role names);
+  - database-level and platform settings, extensions, and Supabase's own backups.
+  Supabase's platform backups, where the plan has them, are an independent fallback. Check them in the Supabase dashboard; this plan doesn't rely on them.
+- **Format:** custom (`-Fc`): compressed, checksummable, restorable table by table. Ownership and ACLs are KEPT in the archive. There is no `--no-owner` or `--no-privileges` at dump time; portability options are applied only at restore time.
 
 ## Prerequisites (operator)
 
 | Item | Requirement |
 | --- | --- |
-| Tools | PostgreSQL client tools of the server's major version or newer. Production reported 17.11 (gate 1); the installed `pg_dump`/`pg_restore` 18.6 (`C:\Program Files\PostgreSQL\18\bin`) can dump and restore a 17 server. Record `pg_dump --version`. |
-| Connection | The same verified-TLS path the service uses: `sslmode=verify-full`, `sslrootcert=apps/api/certs/prod-ca-2021.crt` (public Supabase root CA, in the repo). Session pooler (port 5432) or the direct host. **Not** the transaction pooler (6543), because `pg_dump` needs one session for its snapshot. |
-| Credentials | Typed at the password prompt, or kept in a `pgpass` file inside the secure destination folder (`PGPASSFILE`). Never on the command line, in shell history, in the repo, in OneDrive or in chat. |
-| Destination | A new folder **outside Git and outside OneDrive**, for example `C:\VerityBackups\<UTC date>\` on a local disk, or an encrypted external drive. Not `Desktop`, `Documents` or `Downloads`: OneDrive can back those up. Optionally restrict access to the operator's account (`icacls`). |
-| Disk | A few MB today (84 rows in 15 tables at gate 1). Leave room for 10× growth. |
-| Restore target | A disposable local cluster: `initdb` in a temporary folder, listening on `127.0.0.1` only (for example port 55433), trust auth. Deleted after validation. Never a shared, staging or production database. |
+| Tools | **PostgreSQL 17 client tools (17.11), matching production's major version (17.11, gate 1):** `pg_dump`, `pg_restore`, `psql`, plus `initdb`/`pg_ctl`/`postgres` 17 for the disposable restore server. Record `--version` for each. Don't use 18.x for the production dump: a custom-format archive written by `pg_dump` 18 can't be read by `pg_restore` 17, and validating on an 18 server doesn't prove recovery onto production's major version. |
+| Connection | The **direct host** (`db.<ref>.supabase.co:5432`, user `postgres`), which keeps one real session for the exported snapshot. Verified TLS as the service uses it: `sslmode=verify-full`, `sslrootcert=apps/api/certs/prod-ca-2021.crt` (the public Supabase root CA, in the repo). The direct host is IPv6-only: run from an IPv6-capable machine. Never the transaction pooler (6543). |
+| Credentials | Read in-process from the operator's local `apps/api/.env`, and passed to `pg_dump` only through the child process environment. Never on the command line, in shell history, in a file in the repo or OneDrive, in logs or in chat. |
+| Destination | `C:\VerityBackups\<UTC date>\`, a local disk **outside Git and OneDrive**, restricted to the operator's account (`icacls`). It holds the archive, its checksum, the facts file, the disposable restore server's data directory, and every restore log. Restore logs can contain row fragments (COPY error `CONTEXT` lines), so they never leave it; reports carry only the error class. |
+| Disk | A few MB today (84 rows in 15 tables at gate 1), plus the restore server (~50 MB). Leave room for 10× growth. |
+| Restore target | A disposable PostgreSQL 17 server: `initdb -U postgres --auth=trust` with its data directory under `<destination>\restore\`, listening on `127.0.0.1` only (port 55433). Every restore goes into a **newly created** database. Never a shared, staging or production database. Never start the API or worker against it. |
+
+## Required roles and ownership (no passwords)
+
+Production (gate 1, 2026-10-18):
+- all 15 `public` tables are owned by the same role as `reports`, the role the service connects as (`postgres` on Supabase);
+- RLS is on for 15/15 tables, with 0 policies;
+- `anon` and `authenticated` hold 0 effective SELECT/INSERT/UPDATE/DELETE privileges on any table;
+- `service_role` holds privileges on all 15 tables (informational, item 4c).
+
+A fidelity restore (mode b) needs every role the archive names to exist first. The list is derived from the archive itself, never assumed:
+
+```sh
+pg_restore --schema-only -f - <archive>   # piped, parsed in memory: OWNER TO / GRANT / REVOKE / DEFAULT PRIVILEGES role names
+```
+
+Create each one on the disposable server as `CREATE ROLE <name> NOLOGIN`: no password, no login, no attributes beyond what the check needs. The rehearsal and production results below list the roles found.
+
+**Grants are not re-created by re-running migrations.** Drizzle skips every migration recorded in `drizzle.__drizzle_migrations`, so a restored database keeps exactly the owners and ACLs that the archive restores (mode b) or none (mode a).
 
 ## Procedure
 
-Times in UTC. The operator runs every production-facing step. An agent may run
-the local restore steps under the same approval if asked.
+Times in UTC. The script driver is `ops-backup\backup.mjs` (dump) plus `ops-backup\restore-validate.mjs` (local restore and checks), kept outside Git. It prints facts only: never a connection string, host, user, password or row data.
 
-1. **Window.** Choose a quiet period shortly before the gate 2 migration
-   window, so the dump reflects the data that the migration will see.
-2. **Read-only production counts** at dump time, for the comparison in step 7,
-   run in a `BEGIN TRANSACTION READ ONLY` session:
+1. **Window.** A quiet period shortly before the gate 2 migration window.
+2. **Preflight** (read-only, on the dump connection). Report:
+   - the server version (17.11), `current_database()`;
+   - verified TLS (`sslmode=verify-full` with the repo CA, and `pg_stat_ssl` for the session);
+   - the remote address family (IPv6);
+   - the 6 `drizzle.__drizzle_migrations` rows matching the runbook's gate 2 table;
+   - `to_regclass('public.report_schedules')` is NULL;
+   - the `public` table count (15);
+   - the catalog fingerprint used later: constraint and index counts by kind, functions, triggers, RLS, policies, owners, and client-role privileges.
+3. **Same-snapshot counts and dump.**
+   1. One session runs `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` and `SELECT pg_export_snapshot()`, and counts every table in `public` and `drizzle` inside that transaction.
+   2. While that transaction stays open, the driver starts:
 
-   ```sql
-   SELECT 'users', count(*) FROM users UNION ALL
-   SELECT 'events', count(*) FROM events UNION ALL
-   SELECT 'reports', count(*) FROM reports UNION ALL
-   SELECT 'source_records', count(*) FROM source_records UNION ALL
-   SELECT 'community_signals', count(*) FROM community_signals UNION ALL
-   SELECT 'verification_jobs', count(*) FROM verification_jobs UNION ALL
-   SELECT 'verification_runs', count(*) FROM verification_runs;
-   SELECT count(*) FROM drizzle.__drizzle_migrations;            -- 6
-   ```
+      ```sh
+      pg_dump --format=custom --schema=public --schema=drizzle --snapshot=<id> --file=<destination>/verity-<UTC>.dump
+      ```
 
-   `rate_limit_counters` and `auth_sessions` change constantly; they are not
-   compared.
-3. **Dump** (read-only on production; prompts for the password):
+      Connection settings come from `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE`/`PGSSLMODE`/`PGSSLROOTCERT`/`PGPASSWORD` in the child environment only.
+   3. The exporting transaction ends (ROLLBACK) only after `pg_dump` exits.
 
-   ```sh
-   pg_dump --format=custom --schema=public --schema=drizzle \
-     --no-owner --no-privileges --verbose \
-     --file="<destination>/verity-<UTC timestamp>.dump" \
-     "host=<host> port=5432 dbname=postgres user=<role> sslmode=verify-full sslrootcert=<repo>/apps/api/certs/prod-ca-2021.crt"
-   ```
+   Every count and the archive come from one snapshot, so the restored counts must equal them exactly while production keeps writing. Separately timed count queries are never compared. The driver records the start/end UTC and `pg_dump`'s exit code in `<destination>/backup-facts.json`.
+4. **Checksum and size:** SHA-256 and the byte size, stored next to the archive.
+5. **Inventory:** `pg_restore --list` succeeds, and lists:
+   - 15 `TABLE` in `public` and 1 in `drizzle`;
+   - 2 `FUNCTION` and 3 `TRIGGER` entries;
+   - `ACL` entries.
+   This proves the file is readable, **not** that it restores.
+6. **Restore, two modes**, each into a new database on the disposable PG17 server:
+   - **(a) Data validation:** `createdb verity_data`, the guarded `DROP SCHEMA public` (below), then `pg_restore --no-owner --no-privileges --exit-on-error -d verity_data`.
+   - **(b) Fidelity:** create the archive's roles (NOLOGIN, no passwords), `createdb verity_fidelity`, the guarded drop, then `pg_restore --exit-on-error -d verity_fidelity`, which keeps owners and ACLs.
 
-   - **Ownership and grants:** `--no-owner --no-privileges` let the dump
-     restore into a plain local cluster. Production ownership and grants
-     (the service role as owner, `anon`/`authenticated` revoked) are
-     re-established by the migrations and checked by the runbook's queries.
-     Record the start and end times.
-   - **Log:** the `--verbose` output goes to the console. Keep it out of the
-     repo.
-4. **Checksum and size:** `sha256sum` (or PowerShell `Get-FileHash -Algorithm
-   SHA256`) and the byte size. Store the checksum next to the dump.
-5. **Inventory validation:** `pg_restore --list <dump>` succeeds. Record the
-   entry count, and that it lists 15 `TABLE` entries in `public`, the
-   `__drizzle_migrations` table in `drizzle`, 2 `FUNCTION` and 3 `TRIGGER`
-   entries. This proves the file is readable, **not** that it restores.
-6. **Restore validation**, local and disposable:
+   With `--exit-on-error`, any error fails the step. Record success, or only the first error's class (the log stays in the destination).
+7. **DROP SCHEMA guard.** The archive contains `CREATE SCHEMA public`, so the empty `public` schema of a new database is dropped first. Immediately before the drop, in the same session, the driver asserts:
+   - `current_database()` is the database it just created;
+   - `inet_server_port()` is the disposable port;
+   - `server_version_num` is 17xxxx;
+   - `data_directory` is under `<destination>\restore\`;
+   - `public` contains zero relations and zero functions.
 
-   ```sh
-   initdb -D <tmp>/restore-check -U restore_check --auth=trust -E UTF8
-   pg_ctl -D <tmp>/restore-check -o "-p 55433 -c listen_addresses=127.0.0.1" -l <tmp>/restore-check.log start
-   createdb -h 127.0.0.1 -p 55433 -U restore_check verity_restore
-   psql -h 127.0.0.1 -p 55433 -U restore_check -d verity_restore -c "DROP SCHEMA public"
-   pg_restore --exit-on-error --no-owner --no-privileges \
-     -h 127.0.0.1 -p 55433 -U restore_check -d verity_restore "<dump>"
-   ```
-
-   - **`--exit-on-error`:** any error fails the step. Record success, or the
-     first error's class, never row data.
-   - **Why the empty `public` schema is dropped first:** a dump that names
-     `--schema=public` contains `CREATE SCHEMA public`. Without the drop, the
-     restore fails with "schema public already exists". The drop is safe only
-     because `verity_restore` was created in the previous command and is
-     empty. Never run it anywhere else.
-7. **Checks on the restored database:**
-   - 15 tables in `public` (`SELECT count(*) FROM pg_tables WHERE schemaname='public'`);
-   - the step 2 counts match exactly;
-   - `drizzle.__drizzle_migrations` has 6 rows, and `(created_at, hash)`
-     equals the runbook's gate 2 table;
-   - `to_regclass('public.report_schedules')` is `NULL`;
-   - the 3 triggers exist and are enabled (`O`):
-     `SELECT tgname, tgenabled FROM pg_trigger WHERE NOT tgisinternal`;
-   - RLS is enabled on the 15 tables (`relrowsecurity`).
-   - **Optional rehearsal:** on this restored copy, run PR A's
-     `dist/migrate.js` against `127.0.0.1:55433` and the runbook's gate 3
-     queries. This rehearses gate 2 on real data, locally.
-8. **Cleanup:** `pg_ctl -D <tmp>/restore-check -m fast stop`, then delete
-   `<tmp>/restore-check` and its log. Keep only the dump and its checksum in
-   the destination.
-9. **Evidence for the gate 2 approval** (facts only):
-   - start and end times;
-   - tool and server versions;
-   - size and SHA-256;
-   - the destination, described ("local disk outside OneDrive" or "encrypted
-     external drive"), never a path inside the repo or OneDrive;
-   - the inventory result;
-   - the restore result;
-   - the step 7 checks.
-10. **Retention:** keep the dump until 0006 has been verified in production
+   It aborts otherwise. There is no DROP anywhere else.
+8. **Checks** on both restored databases. Mode a must pass every data check; mode b must pass every check:
+   - restore exit 0;
+   - 15 tables in `public`, plus `drizzle.__drizzle_migrations`;
+   - every per-table count equals the step 3 snapshot count;
+   - 6 history rows, with `(created_at, hash)` equal to the runbook's gate 2 table;
+   - `to_regclass('public.report_schedules')` is NULL;
+   - 2 `verity_*` functions, and 3 non-internal triggers enabled (`O`);
+   - constraint and index counts by kind equal the preflight fingerprint;
+   - RLS on 15/15, 0 policies;
+   - mode b only, roles:
+     - table owners equal production's mapping;
+     - `has_table_privilege` (SELECT/INSERT/UPDATE/DELETE) for `anon`/`authenticated` is 0;
+     - `has_schema_privilege` and `has_function_privilege` for `anon`/`authenticated`/`service_role` equal the production fingerprint;
+     - `service_role` table privileges equal production's.
+9. **Stop** the disposable server. The restore databases, the data directory and the logs stay in the destination until the approver decides to delete them.
+10. **Evidence for the gate 2 approval** (facts only):
+    - start/end times;
+    - tool and server versions;
+    - size and SHA-256;
+    - "local disk outside OneDrive";
+    - the inventory result;
+    - both restore results;
+    - the step 8 checks.
+11. **Retention:** keep the dump until 0006 has been verified in production
     (gate 3) and the release has run cleanly for an agreed period. Then delete
     it from the destination. It contains every production row, including user
     emails and sessions.
 
-## Local rehearsal (2026-10-18, no production data)
+## Local rehearsal (PostgreSQL 17)
 
-The procedure was run end to end on two throwaway local PostgreSQL 18
-clusters:
-- **Source:** a 0005 database with Supabase-like roles and demo data (15
-  events, 29 source records).
-- **Dump:** exit 0, 69 KB.
-- **Inventory:** 119 entries: 15 `TABLE` in `public`, 1 in `drizzle`, 2
-  `FUNCTION`, 3 `TRIGGER`.
-- **First restore:** failed on `CREATE SCHEMA public`. That is the step-6
-  issue, fixed by dropping the empty `public` schema first.
-- **Restore with the fix:** exit 0. Key-table counts and migration history
-  were identical to the source; 15 tables; RLS on 15/15; 3 triggers enabled;
-  no `report_schedules`.
-- **Optional step 7 rehearsal:** the built `dist/migrate.js` applied 0006 to
-  the restored copy (7 history rows, RLS on the new table).
-
-Both clusters were deleted afterwards. A production dump can still differ:
-Supabase role names, grants and the server version (17.11). This is why the
-real restore validation is required.
+To be recorded here after the PG17 rehearsal. An earlier rehearsal used PostgreSQL 18 for the dump, the restore and both servers. **That 18→18 rehearsal is superseded and is not evidence:** it doesn't show recovery onto production's major version (17), its archive format can't be read by `pg_restore` 17, and it dropped owners and ACLs at dump time.
 
 ## Failure handling
 
+Gate 2 stays blocked on any failure below.
+
 | Failure | Meaning | Next step |
 | --- | --- | --- |
+| Preflight fails (TLS, IPv6 reachability, history mismatch, `report_schedules` present) | Nothing was dumped | Fix the connection or stop; rerun under the same backup approval |
 | `pg_dump` can't connect, or TLS fails | Nothing was dumped | Fix the connection settings; rerun under the same backup approval |
-| `pg_dump` errors mid-dump | The file is incomplete | Delete the partial file; rerun under the same backup approval |
+| `pg_dump` errors mid-dump, or exits non-zero | The file is incomplete | Delete the partial file; rerun under the same backup approval |
 | Inventory fails | The file is unreadable | Delete it; take a new dump |
-| Restore fails | The backup is not usable as-is | Gate 2 stays blocked. Report the error class. Don't accept inventory-only without the approver's explicit, recorded risk acceptance |
-| Counts differ | Writes between the counts and the dump, or a bad dump | Re-count and re-dump in a quieter window. Gate 2 stays blocked until they match |
+| Restore (a) or (b) fails | The backup is not usable as-is | Report the error class. Don't accept inventory-only without the approver's explicit, recorded risk acceptance |
+| Counts differ from the snapshot counts | A bad dump, or a defect in the procedure (with one snapshot, writes can't explain it) | Investigate before any re-dump |
+| Role or privilege fingerprint differs (mode b) | The restore doesn't reproduce production's security state | Report the difference; the data backup (mode a) may still be usable, as the approver decides |
+| The DROP guard refuses | The target isn't the disposable database | Stop and investigate; never bypass the guard |
