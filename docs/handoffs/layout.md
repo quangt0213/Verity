@@ -3,8 +3,8 @@
 | | |
 | --- | --- |
 | Owner | `layout` |
-| Branch | `team/layout-fixes` (worktree `C:\Users\quang\verity-worktrees\layout-fixes`), based on `cc44449` |
-| Stage | REVIEW: L0–L4 done; MapShell changes wait on the lead (request 2) |
+| Branch | `team/layout-fixes` (worktree `C:\Users\quang\verity-worktrees\layout-fixes`), fast-forwarded to `team/integration` `642836a`, then follow-up commits |
+| Stage | REVIEW: L0–L4 and the follow-up (feed render cost, schedule fieldset) done |
 | Last updated | 2026-10-17 |
 
 ## Goal
@@ -13,7 +13,8 @@ The map always fills its space and the document never scrolls: each region
 (sidebar, bottom sheet, a page's `<main>`) scrolls on its own, standalone and
 inside Maypop's cross-site iframe. Mobile overlays never cover each other or
 leave the screen, the sheet respects the safe area, and the desktop sidebar
-width adapts from 1024 px up.
+width adapts from 1024 px up. Follow-up: the feed stays cheap to render with
+500 events, and the report form's schedule fields match the rest of the form.
 
 ## Diagnosis (L1: blank space under the desktop map)
 
@@ -59,7 +60,9 @@ container); iframe sizing.
 | Feed and detail roots `relative`; page scrollers (`PageLayout` `<main>`, `Landing` `<main>`) `relative`; `Landing` `<main>` is `h-full` so it scrolls itself | `FeedPanel.tsx`, `detail/EventDetailView.tsx`, `app/PageLayout.tsx`, `onboarding/Landing.tsx` | committed |
 | Bottom sheet: `padding-bottom: env(safe-area-inset-bottom)` included in every snap; peek measured from the header's bottom edge (min 148 px); a drag writes the height to the DOM once per animation frame (React commits only at drag start/end); `data-snap` attribute for tests. Handle stays a `<button>` with Enter/Space, `aria-expanded` and the same labels; snap points and the `onHeightChange` contract unchanged | `map/BottomSheet.tsx` | committed |
 | CSS hook for the mobile attribution: with `[data-sheet-inset]` the bottom controls move above the sheet on the left; with `="with-report"` the attribution leaves room for the Report button. Inert until MapShell sets the attribute | `styles/index.css` | committed |
-| Aside `relative overscroll-contain`; sidebar `w-[clamp(360px,30vw,440px)]`; FAB hidden while a preview is open or the sheet is full; preview hidden while the sheet is full; "Near me" icon-only below 390 px (`aria-label` keeps the name) so the "Zoom in" pill fits; map area sets `data-sheet-inset`/`--sheet-inset`; FAB and preview transition `bottom` with the sheet | `MapShell.tsx` | request 2 |
+| Aside `relative overscroll-contain`; sidebar `w-[clamp(360px,30vw,440px)]`; FAB hidden while a preview is open or the sheet is full; preview hidden while the sheet is full; "Near me" icon-only below 390 px (`aria-label` keeps the name) so the "Zoom in" pill fits; map area sets `data-sheet-inset`/`--sheet-inset`; FAB and preview transition `bottom` with the sheet | `MapShell.tsx` | request 2, applied by the lead in `team/integration` |
+| `EventCard` is `memo` with a by-value comparison (`sameEventSummary`): a pan or poll returns new objects for unchanged events. `FeedPanel` renders 50 cards, then a real "Show N more" button with a `role="status"` "Showing X of Y"; focus moves to the first new card; a filter change resets to 50, a pan keeps what the reader expanded. Order, heading count and the truncation notice (still last) are unchanged; the map still shows every event | `events/EventCard.tsx`, `events/FeedPanel.tsx` | committed |
+| Schedule fieldset: help text names the reporter's time zone (the fields are local times); after a failed submit focus moves to the first field needing attention (category, then the first `aria-invalid`); `datetime-local` gets `min-width: 0`, and on iOS Safari `appearance: none`, `display: block` and a left-aligned value | `report/ReportPage.tsx`, `styles/index.css` | committed |
 
 ## Files changed (committed)
 
@@ -68,7 +71,10 @@ container); iframe sizing.
 `apps/web/src/features/events/FeedPanel.tsx`,
 `apps/web/src/features/events/detail/EventDetailView.tsx`,
 `apps/web/src/app/PageLayout.tsx`, `apps/web/src/features/onboarding/Landing.tsx`,
-`apps/web/e2e/layout.spec.ts` (new), this file.
+`apps/web/e2e/layout.spec.ts` (new), this file. Follow-up:
+`apps/web/src/features/events/EventCard.tsx`, `FeedPanel.tsx`,
+`FeedPanel.test.tsx` (new), `apps/web/e2e/perf/feed.perf.ts` (new),
+`apps/web/src/features/report/ReportPage.tsx`, `ReportPage.test.tsx` (new).
 
 `BottomSheet.test.tsx` is a new file in `features/map/` (map-perf's folder); it
 tests only `BottomSheet.tsx`, which this workstream owns.
@@ -90,6 +96,13 @@ tests only `BottomSheet.tsx`, which this workstream owns.
 - FAB vs preview: hide the FAB while a preview is open rather than stacking two
   floating cards; the preview has its own primary action, and closing it
   restores Report. Desktop is unaffected.
+- Feed: a 50-card first page plus "Show more" rather than virtualization. It
+  needs no row-height measurement, behaves the same in the sidebar, the bottom
+  sheet and the iframe, keeps every rendered card in the accessibility tree and
+  keeps find-in-page working on what's shown.
+- Card memo compares props by value (shallow, JSON for the two small nested
+  objects). `now` still ticks every 30 s and re-renders the visible cards, now
+  at most 50 unless the reader expanded the list.
 - Sidebar width `clamp(360px, 30vw, 440px)`: 360 at 1024 (map 664 px instead of
   624), 384 at 1280, 408 at 1360, 440 from about 1467. Event details fit at 360
   (Follow/Share stay on the header row, no sideways scroll).
@@ -100,10 +113,25 @@ tests only `BottomSheet.tsx`, which this workstream owns.
 2f0a260 Keep the document from scrolling under the desktop map
 534514f Bottom sheet: safe area, measured peek, drag without re-renders
 03b027f Contain positioned content in page scrollers too
+89c8267 Layout handoff: diagnosis, fixes, metrics and MapShell requests
+(fast-forward to team/integration 642836a)
+04b7ef7 Feed: memoized cards and a 50-card first page
+070f0bb Report form: schedule time zone, error focus, date input hardening
 ```
 plus the commit that updates this file.
 
 ## Tests actually run (2026-10-17)
+
+Follow-up, at `070f0bb`:
+
+- `npm run check`: pass. Contracts 54; API 665 passed, 13 skipped; web 123
+  (incl. 6 new FeedPanel and 2 new ReportPage tests).
+- `PW_CHANNEL=chrome npx playwright test`: 55 passed, 19 skipped.
+  `npm run test:e2e:service`: 2 passed.
+- `feed.perf.ts` before (feed files stashed) at 1x once and 4x twice, after at
+  1x twice and 4x twice; numbers below.
+
+Original sprint:
 
 - `npm run check` (root), last run at `03b027f`: pass. Contracts 51 passed; API
   551 passed, 13 skipped; web 95 passed (11 files, incl. 6 new BottomSheet
@@ -154,7 +182,26 @@ Mobile (740 px tall unless noted; "after" includes request 2):
 | Drag, 22 pointermoves | 22 React commits | ≤ 1 |
 | Sidebar width at 1024 / 1280 / 1360 / 1600 | 400 / 400 / 400 / 400 | 360 / 384 / 408 / 440 |
 
+## Feed render cost (500 events, desktop 1360×860, `e2e/perf/feed.perf.ts`)
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| Hover 8 cards: EventCard renders | 5500 (11 commits × 500) | 16 (2 per hover) |
+| Hover 8, 1x: long tasks | 1 (53 ms) | 0 |
+| Hover 8, 4x CPU: long tasks | 12–20, 2.4–3.3 s total, longest 232–319 ms | 0 |
+| Pan to new events: EventCard renders | 500 | 31 |
+| Pan, 1x: long tasks | 2, longest 187 ms, frame gap 140 ms | 0, frame gap 12–18 ms |
+| Pan, 4x CPU: longest task / longest frame | 1036–1324 ms / 776–952 ms | 96–102 ms / 97–103 ms |
+| Small pan, same events: EventCard renders | 500 | 2 |
+| Small pan, 4x CPU: longest task / frame | 266–285 ms / 382–412 ms | none / 36 ms |
+| Cards in the DOM | 500 | 50 |
+
+Pan long tasks include MapLibre work, not only React.
+
 ## Requests to lead
+
+Requests 1 and 2 were applied by the lead (`team/integration` `642836a`).
+The follow-up needs no MapShell change.
 
 1. `C:\Users\quang\verity-worktrees\requests\layout-mapshell-1.patch`
    (superseded by 2; kept for reference): aside `relative overscroll-contain`.
@@ -180,10 +227,7 @@ Mobile (740 px tall unless noted; "after" includes request 2):
    `documentElement.scrollWidth - clientWidth`, which the `#root` clip now
    makes always 0. Its bounding-box half still works. Consider measuring the
    overflow of `#root > *` instead, as `layout.spec.ts` does.
-4. Report form (verifier's `ReportPage.tsx`): no styling defects found at
-   320–1360 px in either theme. Its document scroll is fixed by the
-   `PageLayout` change; nothing needed from the verifier.
-5. Map-perf (`MapView.tsx`): the attribution is a `bottom-right` control that
+4. Map-perf (`MapView.tsx`): the attribution is a `bottom-right` control that
    the CSS moves to the left on mobile. If map-perf adds other bottom-right
    controls, they move too. Making the attribution `bottom-left` in `MapView`
    would let the CSS stop overriding `left`/`right`.
@@ -202,14 +246,17 @@ Mobile (740 px tall unless noted; "after" includes request 2):
   from a preview, add it to the preview card.
 - Safe-area behavior is verified with Chrome's
   `Emulation.setSafeAreaInsetsOverride`, not on a real iOS device.
+- The iOS Safari `datetime-local` rules are standard fixes but unverified on a
+  device.
+- Past the first 50, events are only on the map until the reader expands the
+  list; a marker preview still works, but there's no card to highlight.
 - `layout-overlays.spec.ts` finds a marker by tapping a grid over the map, so
   it needs the basemap (skipped with `E2E_OFFLINE=1`).
 
 ## Resumption steps
 
 1. `cd C:/Users/quang/verity-worktrees/layout-fixes && git log --oneline origin/main..`
-2. To check request 2: `git apply C:/Users/quang/verity-worktrees/requests/layout-mapshell-2.patch`,
-   take the e2e lock, then `cd apps/web && PW_CHANNEL=chrome npx playwright test`.
-   Afterwards run `git checkout -- apps/web/src/features/map/MapShell.tsx && rm apps/web/e2e/layout-overlays.spec.ts`.
-3. After integration: rerun both Playwright suites and check a mobile preview
-   on a real device with a home indicator.
+2. Feed perf: take the e2e lock, then in `apps/web` run
+   `PW_CHANNEL=chrome PERF_LABEL=x PERF_CPU_THROTTLE=4 npx playwright test -c e2e/perf/playwright.perf.config.ts feed.perf.ts`;
+   results land in `node_modules/.cache/verity-perf/x-feed.json`.
+3. Check a mobile preview and the schedule fields on a real iPhone.
