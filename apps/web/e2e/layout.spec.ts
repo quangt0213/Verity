@@ -199,10 +199,15 @@ test.describe("mobile bottom sheet", () => {
     await expect(sheet).toHaveCSS("padding-bottom", `${inset}px`);
     const g = await peekGeometry(page);
     expect(g.controlBottom).toBeLessThanOrEqual(g.innerHeight - inset);
-    // The Report button sits above the (taller) sheet.
-    const fab = await page.getByRole("link", { name: "Report an event" }).boundingBox();
-    const sheetBox = await sheet.boundingBox();
-    expect(fab!.y + fab!.height).toBeLessThanOrEqual(sheetBox!.y);
+    // The Report button sits above the (taller) sheet once both finish animating to the measured peek.
+    const report = page.getByRole("link", { name: "Report an event" });
+    await expect
+      .poll(async () => {
+        const fab = await report.boundingBox();
+        const sheetBox = await sheet.boundingBox();
+        return fab !== null && sheetBox !== null && fab.y + fab.height <= sheetBox.y;
+      })
+      .toBe(true);
   });
 
   test("the handle stays a keyboard-operable button through every size", async ({ page }) => {
