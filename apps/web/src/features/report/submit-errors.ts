@@ -14,8 +14,25 @@ export const SCHEDULE_NOT_ACCEPTED =
   "The Verity service doesn't accept scheduled times yet, so this report wasn't sent. Your schedule is still filled in: clear Starts and Ends to send the report without it, or try again later.";
 
 /**
- * Field and form messages for a report the service didn't accept. Nothing here
- * changes what the user typed; the form keeps every value, including the
+ * The two kinds of failed submit: the service (or the client, before sending)
+ * definitely said no, or nobody can tell whether the report was stored.
+ */
+export type SubmitOutcome = "rejected" | "unknown";
+
+export function submitOutcome(error: WriteError): SubmitOutcome {
+  return error.outcomeUnknown ? "unknown" : "rejected";
+}
+
+export const UNKNOWN_HEADLINE = "We couldn't confirm whether your report was received.";
+
+/** Why the outcome is unknown, in words; only for errors whose outcome is "unknown". */
+export function unknownOutcomeReason(error: WriteError): string {
+  return error.code === "network" ? "The connection failed before Verity answered." : "Verity didn't send a usable answer.";
+}
+
+/**
+ * Field and form messages for a report that definitely wasn't accepted. Nothing
+ * here changes what the user typed; the form keeps every value, including the
  * schedule, and the user decides whether to resubmit.
  *
  * A service that predates scheduled times rejects them with its strict schema
@@ -47,22 +64,9 @@ export function submitFailureErrors(error: WriteError, sentSchedule: boolean): F
   }
   // Errors on fields the form shows speak for themselves.
   if (Object.keys(out).length > 0 && !unmatched) return out;
-  out.form = formMessage(error, sentSchedule);
+  out.form =
+    error.code === "validation_failed"
+      ? `The service didn't accept this report (${error.message.replace(/\.$/, "")}). ${KEPT}`
+      : `${error.message.replace(/\.?$/, ".")} Your report wasn't accepted. ${KEPT}`;
   return out;
-}
-
-function formMessage(error: WriteError, sentSchedule: boolean): string {
-  switch (error.code) {
-    case "network":
-      return `Couldn't reach Verity, so your report wasn't sent. Check your connection and try again. ${KEPT}`;
-    case "unavailable":
-    case "internal":
-      return `Verity is temporarily unavailable, so your report wasn't sent. ${KEPT} Try again in a moment.${
-        sentSchedule ? " If it keeps failing, you can clear the schedule and try again." : ""
-      }`;
-    case "validation_failed":
-      return `The service couldn't accept this report (${error.message.replace(/\.$/, "")}). ${KEPT}`;
-    default:
-      return `${error.message} ${KEPT}`;
-  }
 }

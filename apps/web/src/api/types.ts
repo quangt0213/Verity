@@ -30,6 +30,13 @@ export interface WriteError {
   code: WriteErrorCode;
   message: string;
   fields?: Record<string, string>;
+  /**
+   * The request may have reached the service and been carried out; only the
+   * answer is missing or unusable (network error, timeout, 5xx, a response
+   * that isn't the service's error format). Absent when the service, or the
+   * client before sending, definitely said no.
+   */
+  outcomeUnknown?: true;
 }
 
 export type WriteResult<T> = { ok: true; data: T; simulated: boolean } | { ok: false; error: WriteError };
