@@ -38,12 +38,30 @@ How a budget of 0 behaves:
 
 **What the readiness check does NOT prove.** It checks that `verification_runs`, `geocode_cache` and `report_schedules` exist, plus one marker column (`verification_runs.extract_count`). It does not check other columns, types, constraints, foreign keys, grants, RLS or policies. A table created by hand, or a half-applied migration, could pass it. Correctness rests on applying the migrations through the migrator, and on the tests above.
 
+### Migration gate: bounded timeouts for `db:migrate` (round 2 addendum)
+
+`apps/api/src/scripts/migrate.ts` now goes through `src/db/migrate-runner.ts`:
+- **One connection, bounded timeouts.** It uses one connection (`max: 1`), with `lock_timeout` and `statement_timeout` set as postgres.js startup parameters (`connection: {...}`). The server applies them to the session, and again on a reconnect.
+- **Settings.** `MIGRATE_LOCK_TIMEOUT_MS` (100..600000, default 5000) and `MIGRATE_STATEMENT_TIMEOUT_MS` (1000..3600000, default 60000). Blank means the default. 0 ("no limit") and out-of-range or non-integer values are refused, naming the variable, never the value.
+- **Read-back.** The effective values are read back with `SHOW` on the same connection and logged as values only (never the URL). If either differs from what was requested, the run is refused (`MigrationGateError`).
+- **On failure.** The script prints only the SQLSTATE and exits 1.
+- **Embedded databases.** PGlite (development) migrates without timeouts; there are no other sessions.
+- **Unchanged.** The API and worker pools, `createDatabase().migrate()` and `MIGRATE_ON_START` are untouched. The only shared change is that `migrationsFolder()` is now exported.
+
+**Do the session settings survive the drizzle migrator's transaction?** Yes, proven on real PostgreSQL 18.6 (`test/concurrency/migrate-gate.pg.test.ts`). Session-level settings persist across transactions on one connection, and drizzle runs the pending migrations in one transaction on that connection:
+- **Lock timeout.** Another session held `reports` in ACCESS EXCLUSIVE mode, and the migrator ran with a 500 ms lock timeout. 0006 failed with 55P03 (lock_not_available) within the bound, and afterwards there was no `report_schedules` table and still 6 history rows.
+- **Statement timeout.** A probe migration (create a table, then `pg_sleep(5)`) under a 1000 ms statement timeout failed with 57014, leaving no probe table and still 7 history rows.
+- **Read-back.** SHOW reported `5s/1min` for the defaults and `2s/30s` for explicit values.
+
+**Operator-confirm item (not guessed).** Supabase's transaction-mode pooler (port 6543) does not reliably keep session settings or startup parameters, because a transaction may run on a different server connection. The SHOW check catches a pooler that drops them, but it can't prove that every later transaction lands on the same backend. Run `db:migrate` over a direct connection, or a session-mode pooler (port 5432). The production URL wasn't inspected, and `.env` wasn't read.
+
 ### Suggested wording for files the lead owns
 
 - **SECURITY.md** (billing / Nimble section): "Paid Nimble work is opt-in. `NIMBLE_DAILY_SEARCH_BUDGET`, `NIMBLE_DAILY_EXTRACT_BUDGET`, `NIMBLE_DAILY_AGENT_BUDGET` and `NIMBLE_AGENT_MAX_PER_EVENT` default to 0; a missing, blank or whitespace-only value means 0, which means no paid calls of that kind. Each paid call is reserved against its budget before it is made (`reserveBudget` refuses any amount above the cap). With search at 0, jobs are deferred to the next UTC day and never concluded. The manual smoke scripts are separate and need their own explicit opt-in."
 - **ARCHITECTURE.md** (worker configuration): "Budgets default to 0 (paid work off). Operators opt in per kind, e.g. `NIMBLE_DAILY_SEARCH_BUDGET=200`, `NIMBLE_DAILY_EXTRACT_BUDGET=400`, `NIMBLE_DAILY_AGENT_BUDGET=20`, `NIMBLE_AGENT_MAX_PER_EVENT=2`. The worker's readiness check (`src/worker/schema-ready.ts`) proves only that the 0003–0006 tables exist, not that their constraints, grants or RLS are correct."
 - **WORKSTREAM_STATUS.md**: the deployment step "confirm all four budgets are explicitly 0" can become "confirm the four budget variables are unset, blank or 0 (all mean no paid calls)". The verification row should read: "round 2: zero-default budgets plus 0006 regression tests; REVIEW". Under "No budget default changed", note that the defaults are now 0.
 - **README.md** (line ~168, "defaults (`apps/api/.env.example` lists the budgets and limits)"): add "paid budgets default to 0 (off)".
+- **Runbook / WORKSTREAM_STATUS migration gate**: "`npm run db:migrate -w @verity/api` (or `node dist/migrate.js`) applies migrations on one connection with `lock_timeout` 5 s and `statement_timeout` 60 s by default (`MIGRATE_LOCK_TIMEOUT_MS`, `MIGRATE_STATEMENT_TIMEOUT_MS`). It logs the effective values and refuses to migrate if they don't match. Use a direct or session-mode connection (not Supabase's transaction-mode pooler on 6543). A timeout rolls the whole migration back; retry when the blocking session is gone."
 
 ## Goal
 
@@ -60,6 +78,7 @@ Stop named planned events from being "supported" by unrelated material. The firs
   - `apps/api/src/worker/config.ts` (zero budget defaults);
   - `src/worker/schema-ready.ts` (new) and `src/worker/main.ts`;
   - `apps/api/.env.example`;
+  - migration gate: `src/db/migrate-runner.ts` (new), `src/scripts/migrate.ts`, `src/db/client.ts` (`migrationsFolder` exported), `test/migrate-runner.test.ts` (new), `test/concurrency/migrate-gate.pg.test.ts` (new);
   - tests: `test/worker-config.test.ts`, `test/worker/harness.ts` (`TEST_BUDGET_ENV`, `defaultBudgetConfig`), `test/worker/zero-budgets.test.ts` (new), `test/migration-0006.test.ts` (new), `test/migration-helpers.ts` (new), `test/helpers.ts` (a `migrate` override for partial-schema contexts).
 - Tests: `apps/api/test/fixtures/dia-san-jose.ts` (RECONSTRUCTED, labelled in its header), `test/verification/identity.test.ts`, `test/verification/rules-edge.test.ts`, `test/providers/nimble-query-named.test.ts`, `test/worker/named-event.test.ts`, `test/worker/sweep-starvation.test.ts`, `test/report-schedule.test.ts`; updated `test/migrations.test.ts`, `test/database-access.test.ts`, `test/worker/harness.ts`, contracts tests, `apps/web/src/api/mock/mock-client.test.ts`; new spec `apps/web/e2e/report-schedule.spec.ts`.
 
@@ -112,6 +131,8 @@ Option 1 is the only one that makes the paid run useful without weakening the de
 Round 2 (2026-10-17, on `team/verification-r2`):
 - `npm run check` at the root: pass. Contracts 54; API 687 passed + 13 skipped (47 files, 2 skipped: the real-PostgreSQL suites); web 123; bundle secret scan passed.
 - `TEST_DATABASE_URL=postgres://verity_test@127.0.0.1:55432/postgres npm run test:concurrency -w @verity/api`: 13/13 passed (2 files). It ran against a throwaway PostgreSQL 18.6 cluster (trust auth, 127.0.0.1 only) created in the scratchpad, which was stopped and deleted afterwards.
+- Addendum, the same command on a fresh throwaway cluster: 17/17 passed (3 files, including the 4 migration-gate tests). The cluster was stopped and deleted afterwards. `test/migrate-runner.test.ts`: 14 passed.
+- Addendum `npm run check`: pass. Contracts 54; API 701 passed + 17 skipped (49 files, 3 skipped: the real-PG suites); web 123; bundle secret scan passed.
 - Not run: Playwright (no web change in round 2) and `test:e2e:service`. No live Nimble, no production database.
 
 Round 1 (2026-10-17):
@@ -137,6 +158,8 @@ Round 1 (2026-10-17):
 - With the zero defaults, a deployment that forgets to opt in gathers no external evidence: jobs stay deferred and events stay UNVERIFIED. This is by design, but it is easy to mistake for an outage. Watch for `search_budget_exhausted` in the run notes.
 - Turning the budgets on is a cost decision for the user. Opting in to search alone gives search only (no page reads, no Agent).
 - The readiness check is presence-only (see round 2 above).
+- The migration gate's mismatch refusal is unit-tested (`timeoutsInEffect`), not exercised against a real pooler. Whether production's migration URL is direct or session-mode is for the operator to confirm.
+- The 60 s statement default bounds each statement, not the whole run. A large future data migration may need an explicit higher `MIGRATE_STATEMENT_TIMEOUT_MS`.
 - The 0006 privilege and RLS checks run on PGlite with Supabase-like roles. The real-PostgreSQL suite checks that 0000–0006 apply and that RLS is on for `report_schedules`, but it does not repeat the client-role privilege matrix.
 
 ## Requests to lead
