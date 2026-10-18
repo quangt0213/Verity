@@ -32,6 +32,30 @@ Owner: `verifier`. Current branch: `team/verification-r4` (worktree `<worktrees>
 - **`lifecycle.test.ts` "runs as its own loop"** expected the first tick to include its job, but it was the newest of several ready jobs. Its job is now the oldest ready one, and the test asserts that a tick claims at most `concurrency` jobs.
 - **The `claimFor` helper** made the target the NEWEST ready job and claimed 50. It now makes the target the oldest and claims 1.
 
+**The deployed code has the defect.** `cc44449:apps/api/src/worker/jobs.ts` is byte-identical to the pre-fix file (blob `b65f926…`, the same at `d63c448`). Run against it, `claim-limit.test.ts` fails: 6 claimed with limit 2 (PGlite). The real-PG 30/30 probe ran on that same blob. Production `cc44449` over-claims.
+
+**Audit: LIMIT plus row-lock subqueries inside UPDATE/DELETE** (`apps/api/src`, every `.for("update")`, `.limit(`, `inArray`, `.update(`/`.delete(`):
+
+| Site | Pattern | Verdict |
+| --- | --- | --- |
+| `worker/jobs.ts` `claimJobs` | `UPDATE … WHERE id IN (SELECT … LIMIT n FOR UPDATE SKIP LOCKED)` | **Affected; fixed** (MATERIALIZED CTE, with a failing-then-passing test) |
+| `worker/jobs.ts` `lockOwnedJob`; `settle.ts` fence; `runs.ts` agent-slot run row; `apply.ts`, `reports.ts`, `signals.ts`, `transitions.ts` event rows; `sweep.ts` per-event `SKIP LOCKED` | `SELECT … WHERE id = $1 FOR UPDATE` (one row by key, no LIMIT, not inside an UPDATE) | Not affected |
+| `jobs.ts` `expiredLeases` (reaper), `sweep.ts` candidates, `escalate.ts` `sweepAgentResources` | plain `SELECT … LIMIT n` without a lock, then one fenced statement per row | Not affected (a plain SELECT honors LIMIT) |
+| `budget.ts` `reserveBudget` / `releaseBudget` | single-row `INSERT … ON CONFLICT DO UPDATE … WHERE count + amount <= cap` / `UPDATE` by key | Not affected |
+| `outbox.ts`, `effects.ts`, `settle.ts` job/run updates, `rate-limit.ts` delete | `UPDATE`/`DELETE` by equality or literal `IN` lists | Not affected |
+| Tests: `claimFor` (harness), `claimOne` (`worker.pg.test.ts`) | they call `claimJobs` | Covered by the fix (`claimFor` is hardened) |
+
+Only `claimJobs` had the re-scan behaviour, so there are no other fixes.
+
+**Production impact (from code, no production queries):**
+- **Today** (`cc44449`, budgets effectively 0, one pending RECHECK; the over-claim only matters with more than one ready job): each `tick` claims every ready job when `free ≥ 1`. Each attempt then sets `running`/lease and a run, does the reverse-geocode lookup (free; only if `GEOCODER_PROVIDER=nominatim`), and calls `reserveSearches`. That is refused (`amount > cap`, no counter row), and `deferForBudget` returns the job to `pending` with the attempt refunded until the next UTC day. **No paid call.** The only side effects are lease churn and, with a geocoder, a free lookup per claimed job. Note that `cc44449`'s defaults are non-zero (200/400/20/2) if the variables are unset.
+- **Gate 7, positive budgets:**
+  - **Concurrency is unbounded.** All ready jobs are claimed and processed in parallel; `VERIFICATION_WORKER_CONCURRENCY` is ignored, so expect bursts against Nimble rate limits and the database pool.
+  - **Per-job ceilings still apply:** searches per job, extracts ≤4, and one Agent per logical run (`agentRequestedAt` is persisted, and a retry never buys a second).
+  - **Per-event limits still apply:** the agent cooldown and lifetime cap are checked under the job lock, and there is at most one open job per event.
+  - **The daily budget cannot be exceeded.** Every paid call is reserved first by `reserveBudget`: a single upsert that refuses `amount > cap` and only increments `WHERE count + amount <= cap`. Concurrent reservations serialize on the counter row, the first-insert race resolves through `ON CONFLICT`, and refunds go to the window they were reserved in.
+  - **One amplification path, still inside the budget:** if a burst slows attempts past `VERIFICATION_LEASE_SECONDS`, the reaper can reclaim a job mid-attempt. The stale attempt is fenced out of every write, but its searches/extracts were already reserved and spent, and the retry spends again. The budget still caps the day's total.
+
 **Hypotheses ruled out, with evidence:**
 - Cross-file interference: each file has its own random-named throwaway database.
 - CPU or database contention: isolated runs under 24 busy loops, or under `pgbench -c 24`, never failed.
