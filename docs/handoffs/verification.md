@@ -53,6 +53,8 @@ How a budget of 0 behaves:
 - **Statement timeout.** A probe migration (create a table, then `pg_sleep(5)`) under a 1000 ms statement timeout failed with 57014, leaving no probe table and still 7 history rows.
 - **Read-back.** SHOW reported `5s/1min` for the defaults and `2s/30s` for explicit values.
 
+**Session name (round 3).** The migrator's single connection sets `application_name = 'verity-migrate'` (`MIGRATOR_APPLICATION_NAME`, a startup parameter alongside the timeouts); the API and worker pools keep the driver default `postgres.js`. It is read back with `SHOW application_name` and logged on its own line, for example `Migration session application_name=verity-migrate`, printed only if it looks like a name (otherwise `(other)`). It is NOT part of the safety gate: a pooler may rewrite it. The runbook's primary filter is `pg_stat_activity WHERE application_name = 'verity-migrate'`, with the query-text/locks query as the fallback when a pooler doesn't pass the name through. The real-PG test finds the blocked migrator by name, checks that the fallback finds the same pid, and checks that exactly one session carries the name.
+
 **Failure outcomes (round 3).** `classifyMigrationFailure(error, { started })` in `src/db/migrate-runner.ts` is pure and tested. `started` becomes true just before the drizzle migrator is invoked; `runMigrations` wraps every failure in `MigrationRunError` carrying it. An error from an unknown stage counts as started, so a rollback is never claimed without proof. Output never includes a URL, host, user, password or driver message: only a SQLSTATE (server errors, recognized by postgres.js's `PostgresError` severity) or a stable code name matching `^[A-Z][A-Z0-9_]{1,63}$`.
 
 | Exit | Outcome | When | Exact message |
@@ -157,6 +159,11 @@ Round 3 (2026-10-18, on `team/verification-r3`):
 - `TEST_DATABASE_URL=postgres://verity_test@127.0.0.1:55432/postgres npm run test:concurrency -w @verity/api`: 19/19 passed (3 files; the gate tests now include rolled-back 55P03/57014, UNKNOWN from a terminated backend, and not-attempted 3D000). It ran on a throwaway PostgreSQL 18.6 cluster in the scratchpad, which was stopped and deleted afterwards.
 - `node dist/migrate.js` against that cluster, with the environment inline: exits 0, 3, 3 and 2 as described above.
 - Not run: Playwright (no web change) and `test:e2e:service`.
+- Second commit (`application_name`):
+  - `test/migrate-runner.test.ts`: 46 passed.
+  - `test:concurrency` on a fresh throwaway cluster (stopped and deleted afterwards): 19/19 in most runs.
+  - Pre-existing flake: in 3 of 11 full-directory runs, `test/concurrency/worker.pg.test.ts:252` failed ("runs two workers end to end …": a NEW_REPORT job not `succeeded` with exactly 1 attempt). It reproduced WITHOUT the change (1 of 5 runs at `b0502e3`), never failed when that file ran alone (6/6), and touches no migrator code. It's reported, not fixed (see risks).
+  - `npm run check`: pass. Contracts 58; API 733 passed + 19 skipped; web 132; bundle secret scan passed.
 
 Round 2 (2026-10-17, on `team/verification-r2`):
 - `npm run check` at the root: pass. Contracts 54; API 687 passed + 13 skipped (47 files, 2 skipped: the real-PostgreSQL suites); web 123; bundle secret scan passed.
@@ -192,6 +199,7 @@ Round 1 (2026-10-17):
 - Failure classification depends on postgres.js error shapes: `PostgresError` with `severity` for server errors, and string `code`s for transport errors. A driver upgrade that changes them would degrade toward UNKNOWN (the safe direction), never toward a false "rolled back". The unit tests pin the shapes.
 - A server SQLSTATE returned in reply to COMMIT itself (for example, a deferred constraint) is classified as rolled back, which is what PostgreSQL does. A lost connection around COMMIT is UNKNOWN.
 - `FeedPanel.test.tsx` (layout-owned) runs close to its 5 s timeout and can fail under load. Suggest raising that test's timeout or splitting it.
+- `test/concurrency/worker.pg.test.ts` "runs two workers end to end" is intermittent when the three real-PG files run in parallel on one server (line 252: a NEW_REPORT job not `succeeded`/1 attempt). It predates round 3. Likely contention, e.g. a slow attempt being reaped or retried under the fake clock. It needs investigation in a future round. It never failed when run alone.
 - Exit codes changed from a single 1 to 2–5. Anything that checks only for non-zero is unaffected; anything that matched exit 1 must be updated (the runbook).
 - The 60 s statement default bounds each statement, not the whole run. A large future data migration may need an explicit higher `MIGRATE_STATEMENT_TIMEOUT_MS`.
 - The 0006 privilege and RLS checks run on PGlite with Supabase-like roles. The real-PostgreSQL suite checks that 0000–0006 apply and that RLS is on for `report_schedules`, but it does not repeat the client-role privilege matrix.
