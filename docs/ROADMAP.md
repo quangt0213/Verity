@@ -33,6 +33,17 @@ links never fetched; defer V2; keep every paid Nimble budget at zero.
   Agent run adds nothing. The behavior change is deferred. See
   `docs/handoffs/verification.md` for the recommendation.
 - Agent output schema with verbatim quotes per source (needs one approved live run).
+
+## Release safety (future)
+
+- **API capability flags.** `GET /api/v1/health` could list what the API
+  accepts (for example `features: ["report_schedule"]`), and the report form
+  could show schedule fields only when the API supports them. A frontend and an
+  API of any version could then be released or rolled back in any order. Today
+  the release holds the frontend in a separate PR instead
+  ([RELEASE_RUNBOOK.md](RELEASE_RUNBOOK.md)). Proposed by `map-perf` in round 2;
+  not built.
+- **CI.** No workflow runs the checks on pull requests yet.
 - A reviewed registry of news sources before news classes can support VERIFIED.
 
 ## Verity Smart Navigation (future, not this sprint)

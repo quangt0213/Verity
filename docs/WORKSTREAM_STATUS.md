@@ -9,11 +9,12 @@ Git, code and tests win over this file. If they disagree, fix this file.
 
 | | |
 | --- | --- |
-| Last synchronized | 2026-10-17 (pre-deployment review) |
+| Last synchronized | 2026-10-17 (round 2: release hardening; local only, not pushed) |
 | Sprint baseline | `origin/main` = `cc44449` (merge of PR #6). All four worktrees start here. |
 | Integration branch | `team/integration` (worktree `<worktrees>/integration`) |
 | Worktrees | `<worktrees>` is a local folder outside the repository and outside OneDrive; the exact path is in the local, untracked `docs/HANDOFF.md`. |
 | Production | Unchanged by this sprint. No deploys, migrations, live Nimble calls or pushes to `main`. |
+| Release runbook | [RELEASE_RUNBOOK.md](RELEASE_RUNBOOK.md): seven separately approved gates. Nothing in this file authorizes a production action. |
 | Baseline checks | 2026-10-17 on `cc44449`: `npm run check` passed: 691 tests (51 contracts + 551 API + 89 web; 13 real-PostgreSQL skipped), typecheck, lint, builds, bundle secret scan. Playwright not run at baseline. |
 
 ## Dashboard
@@ -22,10 +23,10 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 
 | Workstream | Agent | Stage | Branch | Tests | Blocker | Next action |
 | --- | --- | --- | --- | --- | --- | --- |
-| Verification intelligence | `verifier` | DONE (merged) | `team/verification` @ `c29fe40` | check: contracts 54, API 665 + 13 skipped, web 90; e2e 29 + 1 skipped | None | None this sprint |
-| Map performance, landmarks, 3D-ready | `map-perf` | DONE (merged) | `team/map-performance` @ `105093a` | check: web 108; e2e 27 + 1 skipped; service 2 | None | None this sprint |
-| Layout and UX | `layout` | DONE (merged) | `team/layout-fixes` @ `0234abf` | check: web 123; e2e 55 + 19 skipped; service 2 | None | None this sprint |
-| Integration and pre-deployment review | lead | REVIEW | `team/integration` (draft PR to `main`) | 2026-10-17, final code: check 842; real PostgreSQL 13/13; e2e 57 + 21 skipped; service 2; San Jose acceptance 2 | User approval | User: review the draft PR; approve each deployment step separately |
+| Verification intelligence | `verifier` | REVIEW (round 2 merged) | `team/verification-r2` @ `dfef1b8` | Round 2: paid budgets default to 0; 0006 regression tests; bounded migrator timeouts. check: API 701 + 17 skipped; real PostgreSQL 17/17 | None | Review |
+| Map / build and release path | `map-perf` | REVIEW (round 2 merged) | `team/map-build-r2` @ `9f389c8` | Round 2: docs only (release path, publication hold); web build plus dist/CSP scan; split trial `npm run check` passed | Maypop and Railway settings need operator confirmation | Review |
+| Layout and report compatibility | `layout` | REVIEW (round 2 merged) | `team/layout-r2` @ `2ad7498` | Round 2: report form keeps input and explains failures; check (contracts 58, web 132); e2e 57 + 21 skipped; service 2 | None | Review |
+| Integration and release readiness | lead | REVIEW | `team/integration` (local, ahead of PR #7) | See "Round 2 test results" | User approval of each release gate | User: review round 2 and the proposed PR split |
 
 ### Integration log
 
@@ -37,7 +38,12 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 | `cc0e74e` | Merge `team/map-performance` |
 | `642836a` | Lead: `map-perf-mapshell-1-integration` (memoized shell context); SECURITY.md and ARCHITECTURE.md updates |
 | `1f7507b` | Merge `team/layout-fixes` follow-up (memoized cards, 50-card pages, schedule fields) |
-| next commit | Pre-deployment review: real-PostgreSQL test updated for 0006, mobile Maypop-like iframe regression, San Jose map acceptance, this review, local paths removed from tracked docs |
+| `c0264c3` | Pre-deployment review: real-PostgreSQL test updated for 0006, mobile Maypop-like iframe regression, San Jose map acceptance, this review, local paths removed from tracked docs (PR #7 head) |
+| `ba65800` | Round 2: merge `team/verification-r2` (zero-default paid budgets, 0006 regression tests) |
+| `3a66faa` | Round 2: merge `team/map-build-r2` (release path, publication hold) |
+| `e432df4` | Round 2: merge `team/layout-r2` (report submission across API versions) |
+| `6987975` | Round 2: merge `team/verification-r2` follow-up (migrator lock and statement timeouts) |
+| next commit | Round 2 lead: [RELEASE_RUNBOOK.md](RELEASE_RUNBOOK.md) (seven gates, gate 2/3 rehearsal), opt-in budgets in README/SECURITY/ARCHITECTURE, roadmap release-safety items, this file |
 
 ## User decisions (2026-10-17)
 
@@ -46,6 +52,45 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 3. **Reporter links:** stay never fetched this sprint.
 4. **V2 (Agent page reads):** deferred. **Every paid Nimble budget stays at zero.**
 5. **Map and layout trade-offs:** provisionally accepted (POI density, preconnect, +150 ms cold `/map`, Report button hidden while a preview is open, sidebar `clamp(360px, 30vw, 440px)`, pull-to-refresh off when top-level on mobile). Padded query bbox: not built.
+
+## Round 2: release hardening (2026-10-17/18, local only)
+
+Authorized: local development and testing only. Nothing was pushed, merged,
+migrated or deployed; PR #7 is still a draft at `c0264c3`.
+
+**What changed:**
+- **Paid Nimble work is opt-in** (`verifier`): the daily search, extract and Agent budgets and the per-event Agent cap default to `0`. Missing, blank or whitespace values mean `0`; explicit positive values are kept. V2 stays deferred.
+- **Migration 0006 regression tests** (`verifier`): populated 0005 → 0006 upgrade with every row unchanged, repeat run, constraints, RLS, client-role privileges, schedule-bearing report rollback before 0006, worker readiness before and after.
+- **Bounded migrator** (`verifier`): `dist/migrate.js` runs on one connection with `lock_timeout` and `statement_timeout`, reads them back, and refuses if they didn't apply.
+- **Release path** (`map-perf`): nothing in the repository can hold a Maypop publication. The verified hold is a two-PR split (backend first, frontend after the new API passes).
+- **Report form** (`layout`): a schedule rejected by the running API used to fail with **no message**. Now every failure keeps all input (schedule included), explains itself, never resends automatically, and can't double-submit.
+- **Runbook** (lead): [RELEASE_RUNBOOK.md](RELEASE_RUNBOOK.md), seven separately approved gates; gates 2 and 3 rehearsed locally.
+
+### Round 2 test results (`team/integration` with the lead commit)
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | Pass. 891 tests: 58 contracts, 701 API (17 real-PostgreSQL skipped, run below), 132 web. Typecheck, lint, builds, bundle secret scan (12 files). |
+| `npm run test:concurrency -w @verity/api` (throwaway local PostgreSQL 18, deleted afterwards) | 17/17 pass, including the 4 new migrator-gate tests |
+| Gates 2 and 3 rehearsal (built `dist/migrate.js`, Supabase-like roles) | Pass; details in the runbook |
+| `PW_CHANNEL=chrome npx playwright test` | 57 passed, 21 skipped (viewport-specific) |
+| `PW_CHANNEL=chrome npm run test:e2e:service` | 2 passed |
+| PR A tree (`apps/web` as at `cc44449`): `npm run check` | See "Proposed PR changes" |
+| Not run | San Jose acceptance (no map or build change); real devices; the old API build; anything in production; any live Nimble call |
+
+### Proposed PR changes (not pushed)
+
+Two local branches implement the publication hold (runbook: "Publication
+hold"). Neither is pushed.
+
+| Branch | Content | Merges |
+| --- | --- | --- |
+| `release/backend` (PR A) | `team/integration` plus one commit that puts `apps/web` back exactly as at `cc44449` | First, at gate 4, after 0006 is applied and verified |
+| `release/frontend` (PR B) | `release/backend` plus one commit that brings back `apps/web` from `team/integration`; its tree equals `team/integration` | At gate 6, after the new API passes gate 5. Against `main`, its diff is `apps/web` only |
+
+Proposed GitHub changes, each needing approval:
+1. Push both branches; open PR A and PR B as drafts (PR B based on `release/backend` until PR A merges, then on `main`).
+2. Keep PR #7 as a draft for the combined review, update its description to point at the split and the runbook, and close it when PR A opens. Don't merge PR #7 itself; merging it ships the frontend with the backend (release blocker).
 
 ## Pre-deployment review (2026-10-17)
 
@@ -121,50 +166,19 @@ New acceptance coverage added in this review:
 - **CSP:** no directive changed. The only new tag is a `preconnect` hint to the existing basemap origin. Lazy route chunks are same-origin (`script-src 'self'`).
 - **RLS:** `report_schedules` has RLS with no policies and client roles revoked (rehearsed on real PostgreSQL; covered by `database-access.test.ts` and the concurrency suite).
 - **Billing:**
-  - Ceilings are unchanged: ≤ 3 searches, ≤ 4 extracts and ≤ 1 Agent run per job, plus daily budgets. No budget default changed.
+  - Ceilings are unchanged: ≤ 3 searches, ≤ 4 extracts and ≤ 1 Agent run per job, plus daily budgets.
   - A budget of `0` means **no paid call**: `reserveBudget` refuses any reservation above the cap. Tests prove zero calls at search budget 0, extract ceiling 0 and Agent budget 0.
-  - The **defaults are not zero** (searches 200/day, extracts 400/day, Agent 20/day, 2 per event). Production stays at zero only if the Railway variables are set explicitly.
+  - **Round 2:** the four paid budgets now **default to `0`** (were 200 searches/day, 400 extracts/day, 20 Agent runs/day, 2 per event). Missing, blank or whitespace values mean `0`; explicit positive values still work. The running production worker (`cc44449`) still has the old defaults until PR A deploys, so its variables must be explicitly `0` (runbook gate 1).
 - **Privacy:** Nimble queries carry the event name, venue, city and month/year. Contact-like text is stripped, and no reporter identity or coordinates are sent. Reporter links are never fetched or sent. Claimed schedules reach the Agent prompt only marked "unconfirmed".
 - **Decision rules:** only stricter. Nothing new can produce VERIFIED.
 - **Secrets:** no secret, production identifier or local path in any added line or tracked doc. Only `.env.example` templates are tracked.
 
-### Exact deployment order (each step needs explicit approval)
+### Deployment order and rollback
 
-0. **Before anything (user, Railway, read-only):**
-   1. On the worker service, confirm that `NIMBLE_DAILY_SEARCH_BUDGET`, `NIMBLE_DAILY_EXTRACT_BUDGET`, `NIMBLE_DAILY_AGENT_BUDGET` and `NIMBLE_AGENT_MAX_PER_EVENT` are all explicitly `0`. Optionally also set `NIMBLE_MAX_EXTRACTS_PER_JOB` to `0`.
-   2. On the API service, confirm that `MIGRATE_ON_START` is not `true`.
-   3. Note how the worker is deployed (separate service, start command, branch).
-1. **Review the draft PR.** Don't merge yet.
-2. **Production database** (approval: "apply 0006"):
-   1. Take a fresh `pg_dump`.
-   2. Read-only: confirm `drizzle.__drizzle_migrations` has 6 rows, the newest from 0005.
-   3. Apply with one migrator (`node dist/migrate.js` from the PR's build, with `DATABASE_URL`, `VERITY_DB_CA_PATH`, `VERITY_DATABASE_ACK`).
-   4. Verify: 7 rows; `report_schedules` exists with RLS on, 0 policies and no `anon`/`authenticated` grants.
-   5. The running API and worker keep working.
-3. **Merge the PR to `main`** (approval: "merge"). This deploys the API and the worker on Railway and lets Maypop rebuild the frontend.
-4. **Verify the API:**
-   1. `GET /api/v1/health`.
-   2. Create a test report with no schedule, then one with a schedule.
-   3. Confirm one `report_schedules` row (count only).
-5. **Verify the worker:**
-   1. The logs show the readiness check passed.
-   2. Jobs are deferred with `search_budget_exhausted` (budget 0, no paid calls).
-   3. The aging sweep runs.
-6. **Verify Maypop:**
-   1. `/welcome`, `/map`, `/report` and an event detail inside Maypop.
-   2. The lazy map chunk loads under Maypop's CSP.
-   3. Scrolling the sidebar or sheet never scrolls the page or the host.
-   4. Places show in San Jose.
-7. Any live verification run is a separate approval (a paid Nimble call).
-
-### Rollback procedure
-
-| Layer | How | Schema impact |
-| --- | --- | --- |
-| Frontend | Maypop: republish the previous build, or revert the merge on `main` | None |
-| API and worker | Railway: redeploy the previous deployment (`cc44449`) | None. The old code ignores `report_schedules` |
-| Database | Keep 0006. Emergency reversal only after the new code is gone (SQL above), or restore the pre-migration dump | Loses reporter schedule claims |
-| Open browser tabs | A tab built before a deploy may 404 on a lazy chunk; `RouteError` offers "Reload the map" | None |
+Superseded by [RELEASE_RUNBOOK.md](RELEASE_RUNBOOK.md) (round 2): seven
+separately approved gates, the backend/frontend PR split that holds the
+frontend, read-only SQL for the migration baseline and post-migration checks,
+and a rollback that keeps 0006.
 
 ### Performance (measured by the teammates; method in `docs/handoffs/map.md` and `layout.md`)
 
@@ -180,9 +194,16 @@ New acceptance coverage added in this review:
 ### Remaining issues
 
 - **Deployment:**
-  - Merging `main` deploys API, worker and frontend together, so 0006 must be applied first.
-  - `MIGRATE_ON_START` and the budget variables can only be checked by the user.
-  - Maypop's import behavior is unverified.
+  - Merging `main` deploys the API and the worker, and may make Maypop rebuild the frontend. 0006 must be applied first, and the frontend must ship in a later PR (runbook: PR A / PR B). Merging PR #7 as one PR is a **release blocker** until the operator confirms and holds Maypop publication.
+  - `MIGRATE_ON_START`, the budget variables, the worker start command, Railway watch paths, Maypop's trigger and its `VITE_*` build variables can only be checked by the operator (runbook gate 1).
+  - A Maypop rebuild without its `VITE_*` build variables shows "not connected". Any merge to `main` can trigger one.
+  - Railway's API deploy failed on 2 of the 3 earlier merges. Keep the `cc44449` redeploy ready.
+  - A meta CSP doesn't govern the map's dedicated worker. If Maypop sends a CSP header on `.js` files, tile requests could be blocked. Check on first publish.
+  - The worker readiness check is presence-only. Gate 3's SQL checks shape, constraints, RLS and privileges.
+  - The `anon`/`authenticated` privilege matrix for `report_schedules` is proven on PGlite with Supabase-like roles. Real PostgreSQL checks the migrations and RLS only.
+- **Report form:**
+  - Recognizing "schedules not supported" depends on the old API's error body (`fields: { "_": "Unexpected field" }`). Anything else gets a generic message, with every field kept.
+  - When a schedule was sent, the server-error message also suggests clearing it "if it keeps failing".
 - **Verification:**
   - Regression fixtures for the live test are reconstructed; the real 10 sources were never read from production.
   - Records stored before this sprint have no identity verdict until re-observed.
@@ -190,7 +211,7 @@ New acceptance coverage added in this review:
   - Place-conflict detection needs an explicit "City, Qualifier".
   - A descriptive title may be treated as a name (errs toward UNVERIFIED).
   - The sweep cursor resets on worker restart.
-  - With every budget at 0, verification jobs stay deferred and no external evidence is gathered (by decision).
+  - With every budget at 0 (now the default), verification jobs stay deferred and no external evidence is gathered (by decision). This is easy to mistake for an outage.
 - **Map:**
   - The detail layer works only on OpenMapTiles-schema styles.
   - OpenFreeMap has no SLA (0.5–1 s per uncached area).

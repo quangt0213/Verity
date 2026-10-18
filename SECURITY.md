@@ -172,6 +172,15 @@ balancer, set `TRUST_PROXY` so the client address is the real one.
 
 Phase 3 adds per-event cooldowns and a global daily Nimble budget.
 
+**Paid work is opt-in.** `NIMBLE_DAILY_SEARCH_BUDGET`,
+`NIMBLE_DAILY_EXTRACT_BUDGET`, `NIMBLE_DAILY_AGENT_BUDGET` and
+`NIMBLE_AGENT_MAX_PER_EVENT` default to `0`. A missing, blank or
+whitespace-only value means `0`, which means no paid call of that kind. Each
+paid call is reserved against its budget before it is made (`reserveBudget`
+refuses any amount above the cap). With search at `0`, a job is deferred to the
+next UTC day and never concluded. The manual `nimble-*-smoke` scripts are
+separate and need their own explicit opt-in.
+
 ## Input validation
 
 All bodies and queries are validated by the **same Zod schemas** (shared

@@ -165,7 +165,10 @@ A separate process from the same codebase that processes the
 `verification_jobs` outbox. It is the **only** component that holds
 `NIMBLE_API_KEY`; the API never needs it. It needs only `NODE_ENV`,
 `DATABASE_URL` and `NIMBLE_API_KEY`; everything else has conservative
-defaults (`apps/api/.env.example` lists the budgets and limits). It refuses to
+defaults (`apps/api/.env.example` lists the budgets and limits). **Paid Nimble
+work is opt-in:** the daily search, extract and Agent budgets and the per-event
+Agent cap default to `0`, so with none set it makes no paid call and jobs wait
+as `search_budget_exhausted`. It refuses to
 start in production without a key, or with a Nimble URL other than
 `https://sdk.nimbleway.com`.
 

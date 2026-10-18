@@ -429,7 +429,13 @@ then the name in news (or official domains), and the category-and-place query
 only as a fallback. Disruptions without a distinctive name keep the category
 strategy. The aging sweep keeps an in-memory round-robin cursor so every
 event is reached, not only the first batch. The worker refuses to start
-unless migrations 0003–0006 are applied.
+unless migrations 0003–0006 are applied. That readiness check
+(`src/worker/schema-ready.ts`) proves only that the tables exist, not that
+their columns, constraints, grants or RLS are correct.
+
+Paid budgets default to `0` (paid work off). Operators opt in per kind, for
+example `NIMBLE_DAILY_SEARCH_BUDGET=200`, `NIMBLE_DAILY_EXTRACT_BUDGET=400`,
+`NIMBLE_DAILY_AGENT_BUDGET=20` and `NIMBLE_AGENT_MAX_PER_EVENT=2`.
 
 ## 6. Nimble integration (planned, Phase 3)
 

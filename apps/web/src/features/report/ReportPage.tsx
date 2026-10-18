@@ -24,7 +24,6 @@ import { useAuth, useGuardedWrite } from "../auth/AuthProvider";
 import { LocationPicker } from "./LocationPicker";
 import { submitFailureErrors, type FieldErrors } from "./submit-errors";
 
-
 /** A `datetime-local` value is the reporter's local wall-clock time; send it as an exact instant. */
 function localToIso(value: string): string | undefined {
   if (!value) return undefined;
