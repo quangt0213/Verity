@@ -522,10 +522,10 @@ authenticated tool.
 | 1 | The 8 downloaded files match the lead's sizes and SHA-256 prefixes. | VERIFIED |
 | 2 | 5 of 8 files are byte-identical to the local `cc44449` build: `theme-init.js`, `favicon.svg`, `maplibre-e7niSQfE.js`, `maplibre-worker-DRFeyNJw.js`, `maplibre-B8-mEBLf.css`. So the dependency versions are the lockfile's (a no-lockfile build changes all three MapLibre files). | VERIFIED |
 | 3 | `index.html` is Verity's template **rewritten by Maypop**, with these additions: an inline `<style>` (`overscroll-behavior: none`) and two inline scripts (activity ping, ambient palette for the host) placed **before** Verity's CSP `<meta>`; `?v=<uuid>` on every asset URL; and a `modulepreload` for the MapLibre chunk. Apart from those and the two hashed names, the file equals the local build. Because the inline scripts precede the CSP meta, the policy doesn't apply to them (meta CSP covers only later content). | VERIFIED (contents); INFERRED (CSP ordering effect) |
-| 4 | `index-DlJ20-aH.css` vs local `index-iIGF2htJ.css`: 552 vs 547 rules. **5 extra utilities** (`.invisible`, `.contents`, `.table`, `.lowercase`, `.transition`) and different last digits in the generated `lab()` colour fallbacks. Nothing removed. Tailwind generates classes from words in scanned files, so v2 scanned extra content. A build with the working directory at the repository root does not reproduce it (tested). | VERIFIED (diff); INFERRED (cause: extra scanned files and a different toolchain or platform) |
+| 4 | `index-DlJ20-aH.css` vs local `index-iIGF2htJ.css`: 552 vs 547 rules. **5 extra utilities** (`.invisible`, `.contents`, `.table`, `.lowercase`, `.transition`) and different last digits in the generated `lab()` colour fallbacks. Nothing removed. Tailwind generates classes from words in scanned files, so v2 scanned extra content. A build with the working directory at the repository root does not reproduce it (tested). | VERIFIED (diff); INFERRED (cause: extra files in the Maypop workspace, possibly leftovers from the iteration-1 scaffold, which a lead check couldn't list; plus Maypop's pnpm/Linux toolchain) |
 | 5 | `index-vxnSeROL.js` vs local `index-CQrri2b3.js`: same embedded library versions (zod 4.6.5, React 19.3.0). Same baked environment keys (`BASE_URL, DEV, MODE, PROD, SSR, VITE_VERITY_API_URL, VITE_VERITY_DATA_SOURCE`), mode `production`. The API URL is identical to the origin used locally. Exactly **one new literal string**, from an extra branch in the config resolver: `"API mode requires a Verity service URL; demo data is disabled."` (data source `api` without a URL shows "not connected"). Every other string difference is minifier renaming. The Maypop SDK lazy chunk is referenced as `./dist-Bnt1kR_e.js`; locally it is `./dist--uvTvYID.js`. | VERIFIED |
 | 6 | That string exists in **no Git object of this repository**: all branches and remotes, reflogs, stashes, and unreachable blobs were searched. | VERIFIED |
-| 7 | Closest committed source: `cc44449` (identical bundle for every `main` merge from `8d65aba` to `cc44449`), plus an uncommitted change to `apps/web/src/config/env.ts`. It was built somewhere other than this machine's checkouts, from a tree with extra Tailwind-scanned content. | INFERRED |
+| 7 | **v2's source family is Maypop's editor workspace (iteration 3, "The approved synchronization", Oct 12).** It is `cc44449`'s `apps/web` (71 of 73 `src` files, plus `index.html` and `public`, SHA-256-identical) with **2 files changed**: `src/config/env.ts`, which adds a branch in `resolveConfig`, `else if (explicit === "api") { dataSource = { kind: "unconfigured", reason: "API mode requires a Verity service URL; demo data is disabled." } }`, between the API-URL branch and the dev-mock fallback; and `src/config/env.test.ts`. No round-1+ files exist there. The workspace was built on Maypop with pnpm (vite 8.3.2 under `node_modules/.pnpm`), not on this machine. See section 6. *Corrects the earlier INFERRED "uncommitted local edit".* | VERIFIED (workspace content, lead 09:07–09:12 UTC); INFERRED (that v2 was built from exactly this iteration) |
 | 8 | User's OneDrive checkout (read-only: `git status`, ignored names, file names and mtimes): branch `fix/api-dockerfile` at `877f211`, clean. No dist contains `index-vxnSeROL.js`. `apps/web/dist` (2026-10-10 12:01 -07:00) has `index-BDZKbHtc.js` and `index-iIGF2htJ.css`, a no-environment build; `dist-e2e` and `dist-e2e-service` date from 2026-10-04. Its only Git remote is `origin` (github.com); there is no Maypop remote. Its `.maypop/` holds dev-server state only (`local/config.json`, `drive/`, `.lock`). | VERIFIED |
 | 9 | The second repo copy "under Documents" wasn't found. No `maypop.toml`, `0006_report_schedules.sql` or `index-vxnSeROL.js` exists under the user profile outside these worktrees (depth 9, excluding `AppData`, `node_modules`, `.git`). I asked the verifier for the exact path. | UNVERIFIED |
 
@@ -541,28 +541,41 @@ authenticated tool.
   INFERRED from that wording: Maypop keeps a Git remote per app and publishes numbered versions with their source, so v2's source may be retrievable from Maypop. UNVERIFIED: whether it is retrievable, and by whom.
 - **SDK README** (VERIFIED): `.maypop/kv-policy.json` is "applied with each published version"; "`maypop init` records the matching build adapter in `maypop.toml`, and `maypop publish` builds and uploads its static output".
 - **Public docs** (VERIFIED, 2026-10-18; `maypop.ai/llms.txt`, `/`, `/landing/challenge/`, `sitemap.xml`): they say only "It's live the moment you make it. No servers to deploy." and "Every change shows up for everyone at once." There is nothing about GitHub connections, studio or editor sync, versions, rollback, drafts, or "your changes are not live".
-- **UNVERIFIED, don't infer "manual only":** what "GitHub connected" does; whether the editor syncs from or to GitHub; whether pushes rebuild or publish; what "your changes are not live" refers to.
-- The v2 bundle's source isn't in GitHub (finding 6), so v2 was **not** a plain build of a GitHub commit. INFERRED; the candidates are an edited Maypop-side workspace or a local uncommitted tree.
+- **Resolved by the UI (section 6):**
+  - the GitHub integration is connected as the repo owner (VERIFIED);
+  - the editor workspace was imported from GitHub, then synchronized (iterations 2 and 3) (VERIFIED);
+  - v2's source is that workspace, not a plain GitHub commit (VERIFIED for the content; INFERRED for the exact iteration).
+- **Still UNVERIFIED, don't infer "manual only":**
+  - whether a push to GitHub starts a sync or a publish by itself, or the user must start the "synchronization" (iteration 3 is labelled "approved", which suggests a user step);
+  - what exactly "Done →" does;
+  - whether "v2 is live — your changes are not" means iteration 3 differs from v2 or is a generic editing label.
 
 ### 3. Rollback options
 
 | Candidate | What it is | Status | Notes |
 | --- | --- | --- | --- |
-| Maypop version history (v1, v2) | Maypop's own record of published versions | UNVERIFIED (needs the UI) | The only path that restores exactly what Maypop served, if the UI offers restore or republish. |
-| Downloaded v2 files | Byte-exact copy of 8 served files | VERIFIED, but **incomplete** | It lacks the SDK chunk `assets/dist-Bnt1kR_e.js`, which loads only inside the Maypop frame. Its `index.html` is Maypop's rewritten copy (injected scripts, `?v=`), not the build output. Source commit: unknown (not in Git). Keep it as forensic evidence, not as an upload. |
-| Rebuild of `cc44449` | A different artifact | VERIFIED buildable | Functionally the same app. It lacks v2's extra "API mode requires a URL" message and has slightly different CSS. Different hashes. |
+| Maypop published-version history (v1, v2) | Maypop's record of published versions | **UNVERIFIED: not found in the UI** (lead 09:07–09:12 UTC) | The app panel shows only "Version v2, Updated 5d ago". No version list or restore was seen. |
+| Editor iteration history | The editor workspace's iterations (scaffold, GitHub import, approved synchronization) | VERIFIED: it exists; older iterations show "Revert" | "Revert" changes the **editor workspace**, not the published version. Whether it plus "Done →" would republish an older state is UNVERIFIED. Iteration 3 is v2's source family. |
+| Downloaded v2 files | Byte-exact copy of 8 served files | VERIFIED, but **incomplete** | It lacks the SDK chunk `assets/dist-Bnt1kR_e.js` (loaded only inside the Maypop frame). Its `index.html` is Maypop's rewritten copy (injected scripts, `?v=`). Its source is now identified (row 7). Keep it as forensic evidence, not as an upload. |
+| Rebuild of `cc44449` + the workspace `env.ts` guard | Reproduces v2's source family | INFERRED | Not byte-identical (Maypop's pnpm toolchain and extra scanned files). Functionally v2. |
+| Rebuild of `cc44449` | A different artifact | VERIFIED buildable | Functionally v2 without the "API mode requires a URL" guard. Different hashes. |
 
-**Recommendation:** treat the **Maypop version history** as the rollback, if the
-UI shows v2 as restorable. Before any v3 is published:
+**Recommendation (revised after the UI evidence):**
 
-1. Record v2's version id, timestamp and any source reference.
-2. With the user's approval, download the missing `assets/dist-Bnt1kR_e.js`, so
-   the preserved copy is complete for forensics.
-
-If the UI offers no restore, the fallback is a **rebuild of a known commit**:
-`cc44449`, or PR B's head after gate 6. Record that it is not byte-identical to
-v2. Never re-upload the downloaded `index.html`: it carries Maypop's injected
-code and version id.
+1. **Preserve the current state.** Don't press Discard, Revert or Done in the
+   editor, and don't Unlink GitHub, until a release step needs it. Iteration 3
+   is the only Maypop-side source of v2, and v2 itself is the live rollback
+   target.
+2. Before any v3, record what's known: v2 (published about Oct 13), iteration 3
+   (Oct 12), and the two changed files. With the user's approval, download
+   `assets/dist-Bnt1kR_e.js`, so the preserved artifact is complete.
+3. **No exact one-click rollback has been verified.** The practical rollback for
+   a bad v3 is to republish a known source through the same path v3 used:
+   Verity's `apps/web` from `cc44449` (or PR B's previous head), synchronized
+   into the editor and published. Record that it isn't byte-identical to v2.
+   Find out (read-only, in the UI or Maypop support) whether published versions
+   can be restored **before** gate 6, not after a failure.
+4. Never re-upload the downloaded `index.html`.
 
 ### 4. Build variables in the artifact
 
@@ -572,8 +585,13 @@ code and version id.
 - VERIFIED: the CSP `connect-src` has 4 sources, including a non-empty API
   origin. No `VITE_MOCK_WRITES`, `VITE_META_CSP` or any other `VITE_*` key is
   baked in.
-- UNVERIFIED: how Maypop stores these values (build environment settings vs. a
-  file in the workspace), and whether a rebuild would get the same values.
+- UNVERIFIED: how Maypop stores these values. The "Edit app details" dialog has
+  no build settings or environment variables (VERIFIED, lead). The editor's dev
+  preview runs without them: its CSP has no API origin (VERIFIED, lead). So the
+  production values come from somewhere not yet seen, and whether a rebuild
+  gets the same ones is unknown. **This is a gate 6 risk.** If the values come
+  from a workspace file that a GitHub sync could overwrite, the new frontend
+  could publish as "not connected".
 
 ### 5. What the lead should look at in the Maypop UI
 
@@ -603,4 +621,71 @@ Restore, Revert, Connect or Sync, and close any dialog with Cancel or Escape.
 4. **Publish dialog:** don't open it if opening could publish. If the UI shows a
    preview of what "Publish" would ship (source or commit), record it without
    confirming.
+
+Items 1–3 were done by the lead (section 6). Still open:
+- where the published-version list and restore live, if they exist;
+- where the `VITE_*` production values are stored;
+- what "Done →" and "synchronization" do.
+
+### 6. Maypop UI evidence (lead, signed in, 2026-10-18 09:07–09:12 UTC, read-only)
+
+Nothing was saved, discarded, reverted, published or unlinked.
+
+1. **App panel** (VERIFIED):
+   - Verity, creator `quangt0213`, sharing "Public on Explore", version **v2**,
+     updated "5d ago", remixing off;
+   - Integrations: GitHub "Connected as quangt0213", with an Unlink button
+     (untouched);
+   - the "Edit app details" dialog has only icon, title, category and
+     description: no build settings and no environment variables (cancelled).
+2. **Editor** (VERIFIED; entered with "Edit app"; neither Discard nor Done was
+   clicked):
+   - title "Untitled App (editing)";
+   - **Iteration history** (local time):
+     1. "Scaffold React and Vite app" (Oct 3, 3:51 am);
+     2. "Imported Verity from your GitHub" (Oct 3, 4:07 am);
+     3. "The approved synchronization" (LATEST, Oct 12, 2:24 pm). The older two
+        offer "Revert" (untouched);
+   - buttons "Discard" and "Done →";
+   - an AI prompt ("Fix something…");
+   - the tooltip "v2 is live — your changes are not".
+3. **Editor preview** (VERIFIED): served from a per-session origin under
+   `apps.app.maypop.ai`. It is a **Vite dev server** (`/@vite/client`,
+   `/src/main.tsx`, `node_modules/.pnpm/vite@8.3.2…`), so the workspace uses
+   pnpm. Its meta CSP has no API origin.
+4. **Workspace source vs `cc44449`** (VERIFIED). The lead fetched `?raw` for all
+   73 `apps/web/src` files, plus `index.html` and `public`, and compared
+   SHA-256:
+   - 71 identical;
+   - 2 differ, `src/config/env.ts` (the v2-only guard in row 7) and
+     `src/config/env.test.ts`;
+   - 0 missing.
+
+   Round-1+ files (`basemap-detail.ts`, `ArrivalCheck.tsx`, `submit-errors.ts`)
+   don't exist. Files outside `cc44449`'s list couldn't be listed (`.git` and
+   `package.json` return 403).
+5. **Consistency** (INFERRED): v2 was updated "5d ago" (about Oct 13), the day
+   after iteration 3 (Oct 12). That fits v2 being published from iteration 3
+   via "Done →".
+6. **Not seen** (UNVERIFIED): a published-versions list or restore, how v2 was
+   published, and where the `VITE_*` values live.
+
+**Release implications** (INFERRED; to confirm before gate 6):
+
+- Maypop doesn't build GitHub `main` directly. GitHub content enters an
+  **editor workspace** through an import or synchronization, and is then made
+  live. The new frontend (PR B) would reach Maypop the same way, after its
+  merge.
+- The workspace holds a change that exists only on Maypop (the `env.ts` guard
+  and its test). A synchronization from GitHub may overwrite it or conflict
+  with it.
+- Losing the guard is harmless **in production builds**. Without it, `api` with
+  no URL still shows "not connected" through the production branch ("No Verity
+  service URL was configured…"). In a **dev** build, such as the editor's Vite
+  dev preview, `cc44449`'s code falls back to demo data instead. That is
+  plausibly why the guard was added in the workspace. Record it anyway, so a
+  conflict prompt isn't a surprise. Whether Verity's own `env.ts` should adopt
+  the guard is a separate decision for the owners.
+- Until the gate 6 path is known, treat **"Done →", "Revert", "Discard" and any
+  synchronization as publish-adjacent actions that need explicit approval.**
 
