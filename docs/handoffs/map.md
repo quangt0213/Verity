@@ -12,6 +12,10 @@ Git, code and tests win over this file.
 path and publication hold. Investigation only, so this is a docs-only commit.
 See "Round 2: release path and publication hold" at the end.
 
+**Round 3 (branch `team/map-build-r3`, from `be0e16b`, with `team/verification-r3`
+`b0502e3` merged):** corrections to `docs/RELEASE_RUNBOOK.md`. Docs only. See
+"Round 3: runbook corrections" at the end.
+
 ## Goal
 
 The user's complaints: new places load slowly after a pan or fly-to; parks,
@@ -414,3 +418,78 @@ Not run:
   (redeploy `cc44449`) ready.
 - Open tabs from an older build can 404 on lazy chunks after a publish;
   `RouteError` offers a reload.
+
+## Round 3: runbook corrections (2026-10-18)
+
+Branch `team/map-build-r3`, from `be0e16b`, with the verifier's
+`team/verification-r3` (`b0502e3`, migrator outcome classes) merged by fast
+forward. Only `docs/RELEASE_RUNBOOK.md` and this file changed. Nothing was
+pushed, and no hosting, Railway, Maypop or GitHub setting changed.
+
+### Runbook changes
+
+- **Approvals.** A new "Approvals" section near the top:
+  - one distinct phrase per gate, "Approve gate N: …", plus phrases for
+    rollback, restore and emergency reversal;
+  - a bare "go ahead" or "merge" approves nothing;
+  - approving one gate never implies the next;
+  - preparing, reviewing, marking ready or approving the draft PRs grants no
+    production authorization;
+  - retries are covered only where gate 2's outcome table says so.
+
+  Each gate's **Approval:** line now uses its phrase. Gate 3 has its own phrase
+  (it used to be "part of gate 2"). Gates 4 and 6 name the PR head SHA, and the
+  approval lapses if the head changes. Gate 1 stays read-only, and changing a
+  setting needs its own approval. Rollback actions need a rollback approval.
+- **PR A / PR B hold kept.** After PR A merges, PR B must be reconciled with
+  the current `main` (merged or rebased) and re-checked before gate 6 is
+  requested: `git diff --name-only origin/main...<PR B head>` may list only
+  `apps/web/**`. Stop otherwise.
+- **Backups (gate 2, item 1).** Inventory validation (`pg_restore --list`
+  proves the file is readable, not restorable) is now separate from restore
+  validation:
+  - a full restore into a throwaway database;
+  - all 15 tables present;
+  - key-table row counts equal production's read-only counts;
+  - the migration history is 6 rows with the expected hashes.
+
+  Restore validation is required for approval unless the approver explicitly
+  accepts inventory-only and the risk is recorded. The evidence list: dump
+  timestamps, tool and server versions, size, SHA-256, storage location
+  (outside the repo and OneDrive), the list result, the restore result and the
+  counts. Never dump contents or connection strings.
+- **Timeouts (gate 2, item 6).** The statement timeout bounds each statement,
+  not the whole run. An effective-timeout mismatch is a **failed safety
+  check** with nothing applied. A transaction-mode pooler is one possible
+  cause, so the connection must be confirmed. This replaces "means the wrong
+  kind of connection".
+- **Migrator outcomes (new "If the migrator doesn't finish cleanly").** The
+  exact messages from `b0502e3`, grouped in three classes:
+  - configuration refusal, nothing attempted (exit 2: configuration, target
+    guard or timeout safety check; exit 3: not attempted, connect, auth or TLS);
+  - confirmed server-side failure, rolled back (exit 4);
+  - uncertain outcome (exit 5).
+
+  It also notes that old checks for exit `1` must change, and never to retry
+  automatically.
+- **Uncertain outcome procedure:**
+  1. Don't retry.
+  2. Confirm the previous migration session has ended. The primary check is
+     `pg_stat_activity` with `application_name = 'verity-migrate'` (the
+     verifier's `55377f0`, merged as `e59cf86`; logged as `Migration session
+     application_name=verity-migrate`). The fallback, for when a pooler
+     doesn't pass the name through, is the query-text, open-transaction and
+     strong-lock query. `pg_terminate_backend` needs its own approval.
+  3. Inspect the history count, newest `created_at` and hash, and
+     `to_regclass('public.report_schedules')`.
+  4. Decide with the approver:
+     - 6 rows and no table: retry under the same approval;
+     - 7 rows (with the table): go to gate 3;
+     - anything else: stop.
+- **Gate 3 recovery** now follows the outcome class instead of assuming a
+  rollback.
+
+### Tests
+
+None run; the change is docs only. The merged migrator code is the
+verifier's, already tested on `team/verification-r3`.
