@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Owner | `layout` |
-| Branch | `team/layout-r2` (worktree `<worktrees>/layout-fixes`), from `c0264c3` (draft PR #7 head). Earlier rounds: `team/layout-fixes` |
-| Stage | REVIEW: round 2 (report compatibility and failure UX) done; L0–L4 and the feed/schedule follow-up done earlier |
-| Last updated | 2026-10-17 |
+| Branch | `team/layout-r3` (worktree `<worktrees>/layout-fixes`), from `be0e16b` (team/integration). Earlier rounds: `team/layout-r2`, `team/layout-fixes` |
+| Stage | REVIEW: round 3 (honest uncertain submit outcomes) done |
+| Last updated | 2026-10-18 |
 
 ## Goal
 
@@ -16,20 +16,21 @@ leave the screen, the sheet respects the safe area, and the desktop sidebar
 width adapts from 1024 px up. Follow-up: the feed stays cheap to render with
 500 events, and the report form's schedule fields match the rest of the form.
 
-## Round 2: report submission across releases
+## Report submission across releases and failures (rounds 2–3)
 
 **Release requirement.** Publish the new frontend only after the new API is
 serving **and** migration 0006 is applied. Until then, a report that includes a
-schedule fails: the running API rejects it (400), and a new API without 0006
-fails it (5xx). Reports without a schedule work in every combination.
+schedule fails: the running API rejects it (400, a definite rejection), and a
+new API without 0006 fails it with a 5xx, which the form reports as an unknown
+outcome. Reports without a schedule work in every combination.
 
-**Compatibility matrix** ("old" = `cc44449`, "new" = `c0264c3` + this branch):
+**Compatibility matrix** ("old" = `cc44449`, "new" = current):
 
 | Frontend → API | No schedule | With schedule | Verified by |
 | --- | --- | --- | --- |
-| New → old API | ✓ the keys are absent from the body | ✗ 400 `validation_failed`, `fields: { "_": "Unexpected field" }`; the form now says the service doesn't accept scheduled times yet and keeps the schedule | `packages/contracts/src/report-compat.test.ts` (frozen v1 schema + the API's field mapping); `ReportPage.submit.test.tsx` (wire body, UI) |
+| New → old API | ✓ the keys are absent from the body | ✗ 400 `validation_failed`, `fields: { "_": "Unexpected field" }`. **Definite:** the form says the service doesn't accept scheduled times yet and keeps the schedule | `packages/contracts/src/report-compat.test.ts` (frozen v1 schema + the API's field mapping); `ReportPage.submit.test.tsx` (wire body, UI) |
 | New → new API, 0006 applied | ✓ | ✓ | `report-compat.test.ts` (current schema); API suite `report-schedule.test.ts` |
-| New → new API, no 0006 | ✓ (no `report_schedules` insert) | ✗ 5xx, transaction rolled back, no partial report; the form says the report wasn't sent, keeps everything and suggests clearing the schedule if it keeps failing | Code reading (`apps/api/src/domain/reports.ts` inserts into `report_schedules` inside the report transaction) and the lead's earlier rehearsal; **not re-run here** |
+| New → new API, no 0006 | ✓ (no `report_schedules` insert) | ✗ 5xx; the transaction rolls back. **Shown as unknown** (below): the form can't prove the rollback, says it couldn't confirm receipt, keeps everything and offers the arrival check, which will find nothing | Code reading (`apps/api/src/domain/reports.ts`) and the lead's earlier rehearsal; **not re-run here** |
 | Old → new API (either schema) | ✓ | n/a (the old form has no schedule) | `report-compat.test.ts`: an old-frontend body passes the current schema |
 
 The new frontend omits `scheduled_start_at`/`scheduled_end_at` when blank: the
@@ -37,24 +38,63 @@ payload spreads them in only when set, `JSON.stringify` drops `undefined`, and a
 schedule typed for a planned category is dropped if the category changes to an
 unplanned one. The old API would reject a `null` value too (tested).
 
-**Failure UX** (`ReportPage.tsx`, `report/submit-errors.ts`): on any failed
-submit the form keeps every value, schedule included, and shows a specific
-message in a `role="alert"`. The alert remounts per attempt, so a repeated
-message is announced again. Focus goes to the first invalid field, or to the
-alert when no field is at fault.
+**Definite vs unknown outcome.** The HTTP client sets `WriteError.outcomeUnknown`
+whenever the request may have been carried out (`api/http-client.ts`,
+`api/types.ts`). `report/submit-errors.ts` classifies on that flag.
 
-| Failure | Message | Focus |
-| --- | --- | --- |
-| 400 `_: "Unexpected field"` after sending a schedule | "The Verity service doesn't accept scheduled times yet, so this report wasn't sent. Your schedule is still filled in: clear Starts and Ends to send the report without it, or try again later." Starts is marked "Not accepted by the service yet" | Starts |
-| 400 on a field the form shows | That field's message | That field |
-| 400 on a field the form doesn't show | "The service couldn't accept this report (…). Everything you entered is still here." | Alert |
-| 5xx / timeout | "Verity is temporarily unavailable, so your report wasn't sent. Everything you entered is still here. Try again in a moment." If a schedule was sent, it adds "If it keeps failing, you can clear the schedule and try again." | Alert |
-| Network error | "Couldn't reach Verity, so your report wasn't sent. Check your connection and try again. Everything you entered is still here." | Alert |
+| Response | Client code | Outcome | What the form says |
+| --- | --- | --- | --- |
+| 400 `_: "Unexpected field"` after sending a schedule | `validation_failed` | Definite | "The Verity service doesn't accept scheduled times yet, so this report wasn't sent. Your schedule is still filled in: …" Starts is marked; focus on Starts |
+| 400 on a field the form shows | `validation_failed` | Definite | That field's message; focus on it |
+| 400 on another key | `validation_failed` | Definite | "The service didn't accept this report (…). Everything you entered is still here." |
+| 401 / 403 / 404 / 409 / 413 / 429 with the service's error body | that code | Definite | The service's message + "Your report wasn't accepted." (401 first opens sign-in) |
+| Nothing sent (no session, demo writes off, unconfigured build) | `auth_required` / `auth_unavailable` / `unavailable` | Definite | As above |
+| Network error (fetch rejected) | `network` | **Unknown** | Amber box: "We couldn't confirm whether your report was received. The connection failed before Verity answered. Everything you entered is still here. Before sending it again, check whether it arrived." + check button |
+| Timeout (12 s client abort) | `unavailable` | **Unknown** | Same box, "Verity didn't send a usable answer." |
+| Any 5xx, including Verity's own well-formed 500 and proxies' 502/503/504 | `unavailable` | **Unknown** | Same |
+| A 4xx without the service's error body (proxy page, 408) | `validation_failed` / `rate_limited` | **Unknown** | Same |
+| 2xx with an unreadable body | `unavailable` | **Unknown** | Same |
+
+Why Verity's own 500 counts as unknown: `createReport` runs in one transaction
+and the route only logs and sends 201 after it resolves, so almost every 500
+means a rollback. But a failure while committing (the connection drops during
+`COMMIT`) also surfaces as a 500 when the commit may have been applied, and the
+client discards 5xx bodies anyway. Treating every 5xx as unknown is the honest
+choice; the arrival check then quickly shows nothing arrived.
+
+Definite failures are red with the existing text; unknown outcomes are amber
+with a question icon. Both use `role="alert"` (remounted per attempt) and take
+focus when no field is at fault.
+
+**Check before retrying** (`report/ArrivalCheck.tsx`). It uses only the public
+event list (`GET /api/v1/events`, `Cache-Control: no-store`) and runs inside the
+form, so the draft is never lost:
+- Query: a box of about ±550 m around the submitted point (the service
+  attaches reports to events within 300 m, `domain/dedupe.ts`) with
+  `updated_since` = attempt start − 10 min (client-clock margin), filtered again
+  client-side.
+- A new report creates an event with the report's exact title at the exact
+  point; an attached report sets the existing event's `last_updated_at` to now.
+  Both appear in that query.
+- Exact title (case/space-insensitive) found: "It arrived: “…” near this
+  location was updated at HH:MM. You don't need to send it again." plus an
+  "Open the event" link. Leaving the form is fine then: the report exists.
+- Other events changed nearby: lists up to 3 with times, "Your report may have
+  been added to one of them", plus the resend note. No links, so the draft stays.
+- Nothing changed: "… so your report most likely didn't arrive. You can send it
+  again."
+- The check fails: "Couldn't check right now. Try again in a moment."
+
+Resend note, worded from `dedupe.ts`: "If you send it again and the first one
+did arrive, Verity usually adds it to the same event instead of creating a new
+one, but it may count as a second report from you." It isn't idempotent: an
+identical resend usually attaches (same place, category and words), but an
+ambiguous runner-up within 0.05 makes a new event, and each send adds a report
+row. There is no auto-follow and no "my reports" endpoint, so Following can't
+serve as the check.
 
 Never: dropping the schedule, resending automatically, or sending a second
-request on a double click. An in-flight guard backs up the disabled button.
-Before this change a 400 from the old API showed **nothing**: its only field
-key, `_`, matched no form field.
+request on a double click (an in-flight guard backs up the disabled button).
 
 **Suggested runbook text** (for `WORKSTREAM_STATUS.md` and the deployment
 checklist):
@@ -71,22 +111,29 @@ checklist):
 >    frontend is live, schedule-bearing reports get the "doesn't accept
 >    scheduled times yet" message and nothing else breaks.
 
-**Round 2 files:** `apps/web/src/features/report/ReportPage.tsx`,
-`apps/web/src/features/report/submit-errors.ts` (new),
-`apps/web/src/features/report/ReportPage.submit.test.tsx` (new),
-`packages/contracts/src/report-compat.test.ts` (new, test only), this file.
+**Files:** `apps/web/src/api/{types,http-client}.ts` (+ `http-client.test.ts`),
+`apps/web/src/features/report/{ReportPage.tsx,submit-errors.ts,ArrivalCheck.tsx,ReportPage.submit.test.tsx}`,
+`packages/contracts/src/report-compat.test.ts` (test only).
 
-**Round 2 tests (2026-10-17):**
-- `npm run check`: pass (contracts 58, API 665 passed / 13 skipped, web 132).
-- `PW_CHANNEL=chrome npx playwright test`: 57 passed, 21 skipped. This
-  includes `layout.spec.ts`, `layout-overlays.spec.ts`,
-  `report-schedule.spec.ts` and `smoke.spec.ts`. `layout.spec.ts` and
-  `report-schedule.spec.ts` rerun on their own: 21 passed, 11 skipped.
-- `npm run test:e2e:service`: 2 passed.
-- The new submit tests against the PR #7 `ReportPage.tsx`: 4 failed (the
-  old-API 400 showed nothing; 5xx and network showed a generic line), 5 passed.
-- Not run: the old API build, the new API against a database without 0006, and
-  the perf suite (no feed change).
+**Tests (round 3, 2026-10-18, branch `team/layout-r3` from `be0e16b`):**
+- `npm run check`: pass (contracts 58; API 701 passed / 17 skipped; web 142).
+- `ReportPage.submit.test.tsx`, 17 tests:
+  - Wire body.
+  - Definite: old-API schedule 400, field 400, other-key 400, 429.
+  - Unknown: network, Verity 500, proxy 502, proxy 504, 2xx with an unreadable
+    body. Each checks the wording, that the input is kept, focus, exactly one
+    request and the check button.
+  - The three check results.
+  - The user's resend after "nothing changed" is the same body.
+  - Double click.
+- `http-client.test.ts`: the `outcomeUnknown` flag for network/500/502/504/
+  408/unreadable-2xx (set) and 400/429/401 (absent); a client timeout sets it.
+- `PW_CHANNEL=chrome npx playwright test`: 57 passed, 21 skipped
+  (`layout.spec.ts`, `layout-overlays.spec.ts`, `report-schedule.spec.ts`,
+  `smoke.spec.ts`, `evidence.spec.ts`). `npm run test:e2e:service`: 2 passed.
+- Not run: the old API build; the new API without 0006; a real network drop
+  against a real service; a visual check of the amber box on a phone (no e2e
+  reproduces an unknown outcome; the demo adapter never fails).
 
 ## Diagnosis (L1: blank space under the desktop map)
 
@@ -306,6 +353,10 @@ The follow-up needs no MapShell change.
 
 ## Remaining risks
 
+- Reports: an unknown outcome can be a duplicate if the user resends without
+  checking; the arrival check depends on the event list reflecting the write
+  (same database, no cache) and on the client clock being within 10 min of the
+  server.
 - Round 2: detecting "schedules not supported" relies on the old API's error
   body (`fields._ === "Unexpected field"` for a report that carried a
   schedule). If a proxy or another API version answers differently, the user
@@ -339,6 +390,6 @@ The follow-up needs no MapShell change.
    `PW_CHANNEL=chrome PERF_LABEL=x PERF_CPU_THROTTLE=4 npx playwright test -c e2e/perf/playwright.perf.config.ts feed.perf.ts`;
    results land in `node_modules/.cache/verity-perf/x-feed.json`.
 3. Check a mobile preview and the schedule fields on a real iPhone.
-4. Round 2: `git switch team/layout-r2`; the compatibility tests are
+4. Reports (rounds 2–3): on `team/layout-r3`, the compatibility tests are
    `npx vitest run src/report-compat.test.ts` in `packages/contracts` and
    `npx vitest run src/features/report` in `apps/web`.

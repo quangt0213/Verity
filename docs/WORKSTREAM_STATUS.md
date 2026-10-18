@@ -9,7 +9,7 @@ Git, code and tests win over this file. If they disagree, fix this file.
 
 | | |
 | --- | --- |
-| Last synchronized | 2026-10-17 (round 2: release hardening; local only, not pushed) |
+| Last synchronized | 2026-10-18 (round 3: failure handling; release branches published as draft PRs) |
 | Sprint baseline | `origin/main` = `cc44449` (merge of PR #6). All four worktrees start here. |
 | Integration branch | `team/integration` (worktree `<worktrees>/integration`) |
 | Worktrees | `<worktrees>` is a local folder outside the repository and outside OneDrive; the exact path is in the local, untracked `docs/HANDOFF.md`. |
@@ -23,10 +23,10 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 
 | Workstream | Agent | Stage | Branch | Tests | Blocker | Next action |
 | --- | --- | --- | --- | --- | --- | --- |
-| Verification intelligence | `verifier` | REVIEW (round 2 merged) | `team/verification-r2` @ `dfef1b8` | Round 2: paid budgets default to 0; 0006 regression tests; bounded migrator timeouts. check: API 701 + 17 skipped; real PostgreSQL 17/17 | None | Review |
-| Map / build and release path | `map-perf` | REVIEW (round 2 merged) | `team/map-build-r2` @ `9f389c8` | Round 2: docs only (release path, publication hold); web build plus dist/CSP scan; split trial `npm run check` passed | Maypop and Railway settings need operator confirmation | Review |
-| Layout and report compatibility | `layout` | REVIEW (round 2 merged) | `team/layout-r2` @ `2ad7498` | Round 2: report form keeps input and explains failures; check (contracts 58, web 132); e2e 57 + 21 skipped; service 2 | None | Review |
-| Integration and release readiness | lead | REVIEW | `team/integration` (local, ahead of PR #7) | See "Round 2 test results" | User approval of each release gate | User: review round 2 and the proposed PR split |
+| Verification intelligence | `verifier` | REVIEW (round 3 merged) | `team/verification-r3` @ `55377f0` | Round 3: migrator failure classes (exit 2 refused, 3 not attempted, 4 rolled back, 5 unknown), session name `verity-migrate`. check: API 733 + 19 skipped; real PostgreSQL 19/19 | None | Review |
+| Map / build and release path | `map-perf` | REVIEW (round 3 merged) | `team/map-build-r3` @ `24df1cd` | Round 3: docs only (runbook failure handling, backup restore validation, approval phrases, PR B reconciliation) | Maypop and Railway settings need operator confirmation | Review |
+| Layout and report compatibility | `layout` | REVIEW (round 3 merged) | `team/layout-r3` @ `6499d03` | Round 3: unknown submit outcomes with an arrival check; FeedPanel test 4.8 s → 2.2 s. check: web 142; e2e 57 + 21 skipped; service 2 | None | Review |
+| Integration and release readiness | lead | REVIEW | `team/integration`; `release/backend` (PR A) and `release/frontend` (PR B) as draft PRs | See "Round 3 test results" | User approval of each release gate | User: approve gate 1 (read-only preflight) only |
 
 ### Integration log
 
@@ -43,7 +43,11 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 | `3a66faa` | Round 2: merge `team/map-build-r2` (release path, publication hold) |
 | `e432df4` | Round 2: merge `team/layout-r2` (report submission across API versions) |
 | `6987975` | Round 2: merge `team/verification-r2` follow-up (migrator lock and statement timeouts) |
-| next commit | Round 2 lead: [RELEASE_RUNBOOK.md](RELEASE_RUNBOOK.md) (seven gates, gate 2/3 rehearsal), opt-in budgets in README/SECURITY/ARCHITECTURE, roadmap release-safety items, this file |
+| `f3a4008`, `83c4340`, `be0e16b` | Round 2 lead: [RELEASE_RUNBOOK.md](RELEASE_RUNBOOK.md) (seven gates, gate 2/3 rehearsal), opt-in budgets in README/SECURITY/ARCHITECTURE, roadmap release-safety items, this file |
+| `cd3c6a6`, `6a2f5fe` | Round 3: merge `team/verification-r3` (failure classes, then `application_name`) |
+| `655227f` | Round 3: merge `team/map-build-r3` (runbook) |
+| `e748524` | Round 3: merge `team/layout-r3` (unknown outcomes, arrival check, FeedPanel test speed) |
+| next commit | Round 3 lead: PR B base change in the runbook, this file |
 
 ## User decisions (2026-10-17)
 
@@ -52,6 +56,29 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 3. **Reporter links:** stay never fetched this sprint.
 4. **V2 (Agent page reads):** deferred. **Every paid Nimble budget stays at zero.**
 5. **Map and layout trade-offs:** provisionally accepted (POI density, preconnect, +150 ms cold `/map`, Report button hidden while a preview is open, sidebar `clamp(360px, 30vw, 440px)`, pull-to-refresh off when top-level on mobile). Padded query bbox: not built.
+
+## Round 3: honest failure handling (2026-10-18)
+
+Authorized: local corrections and tests, pushing `release/backend` and
+`release/frontend`, opening their draft PRs and updating PR #7's description.
+Not authorized: merging, any remote migration, deploying, production settings,
+paid calls.
+
+**What changed:**
+- **Migrator failure classes** (`verifier`): the migrator no longer claims a rollback it can't prove. Exit 2 = refused (configuration, target guard, or the timeout safety check failed); 3 = not attempted (couldn't connect or authenticate); 4 = the server rejected a statement inside the migration transaction, which PostgreSQL rolled back; 5 = **outcome unknown** (the connection failed after migrations started): don't retry; confirm the session has ended, inspect history and schema, decide with the approver. It never retries by itself, and output never contains credentials, hosts or driver messages. Its session is named `verity-migrate`.
+- **Runbook** (`map-perf`): per-gate approval phrases; the outcome table and the unknown-outcome procedure; the timeout mismatch is a failed safety check, not proof of a pooler mode; backups need **restore** validation (inventory-only only if the approver explicitly accepts the risk); PR B must be reconciled with `main` after PR A merges and re-checked to be `apps/web/**` only.
+- **Report form** (`layout`): network errors, timeouts, any 5xx and unreadable responses now say "We couldn't confirm whether your report was received. Everything you entered is still here." A **Check whether it arrived** button searches the public event list near the reported point (inside the form, so the draft is kept). Definite rejections (the service's own 4xx) keep their specific messages. No automatic retry, one request per submit, the schedule is never dropped.
+
+### Round 3 test results (`team/integration` @ `e748524` plus the lead docs commit; new runs only)
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | Pass. 933 tests: 58 contracts, 733 API (19 real-PostgreSQL skipped, run below), 142 web. Typecheck, lint, builds, bundle secret scan |
+| `npm run test:concurrency -w @verity/api` (throwaway local PostgreSQL 18, deleted afterwards) | 19/19, five runs in a row. The verifier saw the two-worker end-to-end test fail intermittently when the three files run in parallel (3 of 11 runs, and 1 of 5 before this round's change); it passed alone 6/6. Not reproduced here; open risk |
+| Built `dist/migrate.js` | Exit 0 with the timeouts and `application_name=verity-migrate` lines; exit 3 for a missing database (`SQLSTATE 3D000`); exit 2 for `MIGRATE_LOCK_TIMEOUT_MS=0`. A placeholder password and the database name never appeared |
+| `PW_CHANNEL=chrome npx playwright test` | 57 passed, 21 skipped |
+| `PW_CHANNEL=chrome npm run test:e2e:service` | 2 passed |
+| Not run | San Jose acceptance (no map change); a real network drop against a real service; the amber outcome box on a phone; anything in production |
 
 ## Round 2: release hardening (2026-10-17/18, local only)
 
@@ -80,17 +107,12 @@ migrated or deployed; PR #7 is still a draft at `c0264c3`.
 
 ### Proposed PR changes (not pushed)
 
-Two local branches implement the publication hold (runbook: "Publication
-hold"). Neither is pushed.
-
-| Branch | Content | Merges |
-| --- | --- | --- |
-| `release/backend` (PR A) | `team/integration` plus one commit that puts `apps/web` back exactly as at `cc44449` | First, at gate 4, after 0006 is applied and verified |
-| `release/frontend` (PR B) | `release/backend` plus one commit that brings back `apps/web` from `team/integration`; its tree equals `team/integration` | At gate 6, after the new API passes gate 5. Against `main`, its diff is `apps/web` only |
-
-Proposed GitHub changes, each needing approval:
-1. Push both branches; open PR A and PR B as drafts (PR B based on `release/backend` until PR A merges, then on `main`).
-2. Keep PR #7 as a draft for the combined review, update its description to point at the split and the runbook, and close it when PR A opens. Don't merge PR #7 itself; merging it ships the frontend with the backend (release blocker).
+Superseded by round 3: `release/backend` (PR A, `apps/web` exactly as at
+`cc44449`) and `release/frontend` (PR B, tree = `team/integration`) are
+published as draft PRs. PR A targets `main`; PR B targets `release/backend`, so
+its review shows only the frontend. After PR A merges, PR B is retargeted to
+`main`, reconciled and re-checked (runbook, gate 6). PR #7 stays open as a
+draft for the combined review and must not be merged.
 
 ## Pre-deployment review (2026-10-17)
 

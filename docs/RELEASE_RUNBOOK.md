@@ -1,10 +1,38 @@
 # Release runbook: migration 0006 and the round-2 release
 
 This runbook releases draft PR #7 (verification relevance, map, layout, report
-schedules, migration 0006, paid-work opt-in) to production. **Every gate below
-needs its own explicit approval from the project owner.** Approving one gate
-never approves the next. Preparing or reviewing this runbook authorizes
-nothing.
+schedules, migration 0006, paid-work opt-in) to production as two PRs (PR A
+backend, PR B frontend; see "Publication hold").
+
+## Approvals
+
+**Every gate needs its own explicit approval from the project owner, using
+that gate's phrase.**
+
+- An approval names its gate, for example "Approve gate 2: apply migration 0006
+  to production." A bare "go ahead", "yes", "merge" or "ship it" approves
+  nothing.
+- **Approving one gate never implies the next**, even when the next gate is
+  read-only or the steps run back to back.
+- **Preparing, reviewing or publishing the draft PRs grants no production
+  authorization.** That covers marking PR A or PR B ready for review,
+  requesting review, or approving the PRs on GitHub. Neither does preparing or
+  reviewing this runbook.
+- A retry is covered by the original approval only where this runbook says so
+  (gate 2, "If the migrator doesn't finish cleanly"). Every other retry needs
+  a new approval.
+
+| Gate | Approval phrase | What it authorizes |
+| --- | --- | --- |
+| 1 | "Approve gate 1: read-only production preflight." | Read-only checks in Railway, Maypop, Supabase and GitHub |
+| 2 | "Approve gate 2: apply migration 0006 to production." | Running the migrator for 0006 after the backup evidence is accepted, plus only the retries its outcome table allows |
+| 3 | "Approve gate 3: post-migration verification (read-only)." | The gate 3 queries and the health and log checks |
+| 4 | "Approve gate 4: merge PR A at `<head SHA>`." | Merging PR A, which deploys the API and worker |
+| 5 | "Approve gate 5: production smoke test with `<account>`, `<location>`, `<retirement plan>`." | The listed test writes |
+| 6 | "Approve gate 6: merge PR B at `<head SHA>` and publish the frontend." | Merging PR B and publishing on Maypop |
+| 7 | "Approve gate 7: paid verification with budgets `<…>` from `<start>` to `<end>`." | The stated budgets for the stated window |
+| — | "Approve rollback of `<frontend / API and worker>` to `<build or deployment>`." | Only that rollback (see Rollback) |
+| — | "Approve restore from the gate 2 backup." / "Approve emergency reversal of 0006." | Only that recovery action |
 
 Git, code and tests win over this file. If they disagree, fix this file.
 
@@ -37,6 +65,10 @@ publication. The only hold that can be verified from the repository is to
   PR A's backend (`npm run check` passed).
 - **PR B, frontend:** `apps/web` and its tests, merged only after the new API
   passes gate 5. PR B's merge also redeploys Railway with unchanged API code.
+  After PR A merges, PR B must be **reconciled with the current `main`** (merge
+  `main` into it, or rebase it onto `main`). Its diff against `main` must then
+  be re-checked to contain only `apps/web/**` before gate 6 is requested (see
+  gate 6).
 
 **Release blocker:** if PR #7 is merged as one PR, the release stays blocked
 until the operator confirms how Maypop publishes after a push to `main` and
@@ -64,7 +96,8 @@ constraints, grants, RLS or policies are correct; gate 3 checks those.
 
 ## Gate 1: read-only production preflight
 
-**Approval:** "Run the read-only preflight." No writes anywhere.
+**Approval:** "Approve gate 1: read-only production preflight." No writes
+anywhere.
 
 The operator confirms in Railway, Maypop, Supabase and GitHub, reporting names
 and states only, never values:
@@ -93,19 +126,50 @@ and states only, never values:
 7. **Database, read-only:** run the baseline query from gate 2 and record the
    result.
 
-**Stop** if any item differs. Fix settings only with a separate approval.
+**Stop** if any item differs. Changing a setting needs its own approval that
+names the setting; gate 1's approval is read-only.
 
 ## Gate 2: migration-only approval (apply 0006)
 
-**Approval:** "Apply migration 0006 to production." This approves only the
-migration, not a merge or deployment.
+**Approval:** "Approve gate 2: apply migration 0006 to production." This
+approves only the migration: not gate 3, not a merge, not a deployment. Request
+it only after the backup evidence below has been presented.
 
 Preconditions, all required:
 
-1. **A fresh, usable backup:** `pg_dump` taken immediately before, plus proof
-   that it is usable (`pg_restore --list` succeeds, or a restore into a
-   throwaway local database). Store it outside the repository and outside
-   OneDrive.
+1. **A fresh, validated backup.** Take a `pg_dump` (custom format, `-Fc`)
+   immediately before the migration window. Store it outside the repository and
+   outside OneDrive. There are two levels of validation, and they prove
+   different things:
+   - **Inventory validation:** `pg_restore --list <dump>` reads the archive's
+     table of contents. It proves the file is readable and lists the expected
+     objects. It does **not** prove the dump can be restored.
+   - **Restore validation:** a full `pg_restore` into a throwaway database
+     (local, never production or any shared database), followed by these
+     checks:
+     - all 15 Verity tables in `public` exist (every `CREATE TABLE` in
+       0000–0005);
+     - row counts for the key tables (`users`, `events`, `reports`,
+       `source_records`, `community_signals`, `verification_jobs`,
+       `verification_runs`) equal the production counts taken read-only at
+       dump time;
+     - `drizzle.__drizzle_migrations` has exactly the 6 rows and hashes in item 2.
+
+   **Restore validation is required for gate 2 approval.** The only exception
+   is if the approver explicitly accepts inventory-only validation and the
+   accepted risk is recorded with the approval: a backup that may not restore.
+
+   **Evidence the operator presents before approval.** Facts only: never dump
+   contents, data rows or connection strings, and never paste any of them into
+   docs, PRs or chat.
+   - dump start and end timestamps (UTC);
+   - `pg_dump`/`pg_restore` versions and the production server version;
+   - file size and SHA-256 checksum;
+   - storage location, described (for example "encrypted external drive", not
+     a path inside the repository or OneDrive);
+   - the `pg_restore --list` result (succeeded, entry count);
+   - the restore result (succeeded with no errors, or the exact error class)
+     and the table, row-count and migration-history comparison above.
 2. **Baseline history matches the repository** (read-only):
 
    ```sql
@@ -151,23 +215,133 @@ Preconditions, all required:
    **Use a direct or session-mode connection** (Supabase pooler port 5432, or
    the direct host), not the transaction-mode pooler (port 6543), which may not
    keep session settings. The operator confirms which connection is used.
-   Expected log line: `Migration timeouts in effect: lock_timeout=5s
-   statement_timeout=1min`. A refusal ("did not keep the requested
-   lock_timeout/statement_timeout") means the wrong kind of connection.
-   After a timeout (SQLSTATE `55P03` or `57014`) the whole migration has rolled
-   back: re-run the gate 2 baseline query and retry once the blocking session
-   is gone, without raising the limits blindly. The statement timeout bounds
-   each statement, not the whole run.
+   Expected log lines: `Migration timeouts in effect: lock_timeout=5s
+   statement_timeout=1min`, then `Migration session
+   application_name=verity-migrate`. The second line is informational only. If
+   it shows a different name or `(other)`, the run continues, and the
+   uncertain-outcome procedure must use its fallback check.
+   - **The statement timeout bounds each statement, not the whole run.** A
+     run with several statements can take longer than
+     `MIGRATE_STATEMENT_TIMEOUT_MS` in total without any of them timing out.
+   - **An effective-timeout mismatch is a failed safety check, and nothing is
+     applied** (exit 2, "Migration refused: safety check failed (the connection
+     did not keep the requested lock_timeout/statement_timeout)…"). It means the
+     values the server reported differ from the requested ones. A transaction-mode pooler is one possible
+     cause, but not the only one: a role or database default, a proxy, or a
+     server that rewrites settings could also do it. Confirm what the
+     connection actually is before retrying, and don't raise or remove the
+     limits to make the check pass.
+   - Any other failure: see "If the migrator doesn't finish cleanly" below.
 7. **Timing:** a quiet period. Adding the foreign key briefly blocks report
    writes (`SHARE ROW EXCLUSIVE` on `reports`).
 
 The running `cc44449` API and worker keep working after 0006 (they never
 reference the new table). **Stop** after this gate.
 
+### If the migrator doesn't finish cleanly
+
+Success is exit code 0, ending with `Migrations applied.` (after the
+timeouts and application_name lines in item 6).
+Anything else falls into one of three outcome classes; the exit code and the
+message say which (`apps/api/src/db/migrate-runner.ts`, `apps/api/src/scripts/migrate.ts`).
+
+- Output never contains a URL, host, user, password or driver message. The
+  only variable part, `<…>` below, is a SQLSTATE (for example `SQLSTATE 55P03`)
+  or an error-code name (for example `ECONNRESET`).
+- Exit codes used to be a single `1`. **Anything that checks for exit `1` must
+  change**; a plain non-zero check still works.
+- **Never retry automatically.** The migrator itself never retries, and no
+  script, loop or restart policy may re-run it.
+
+| Outcome class | Exit | Message (exact) | What happened | What to do |
+| --- | --- | --- | --- | --- |
+| **Configuration refusal: nothing attempted** | 2 | `Migration refused: invalid or incomplete database configuration. Nothing was applied. Fix the configuration, then run again.` (the next line names the variable, never its value) | Invalid environment, or a missing or corrupt CA file | Fix the named setting (names only, never values). Re-run the gate 2 baseline query; it must still show 6 rows and no table. Retrying under the same gate 2 approval is allowed once it's fixed and the approver is told. |
+| | 2 | `Migration refused: database target check failed. Nothing was applied.` (the next lines list the problems) | The remote-target guard refused (for example a missing or wrong `VERITY_DATABASE_ACK`) | Same as above |
+| | 2 | `Migration refused: safety check failed (the connection did not keep the requested lock_timeout/statement_timeout). Nothing was applied. Use a direct or session-mode connection, then run again.` | The effective-timeout safety check failed (item 6). The connection may be a transaction-mode pooler, or something else may override the settings | Confirm what the connection actually is before re-running. Don't loosen the limits. Then same as above |
+| | 3 | `Migration not attempted: could not connect to or authenticate with the database (<…>). Nothing was applied. Check the connection settings, then run again.` | Connect, authentication or TLS failure before any migration SQL ran (for example `28P01`, `3D000`, `ECONNREFUSED`, certificate errors, `CONNECT_TIMEOUT`) | Same as above |
+| **Confirmed server-side failure: rolled back** | 4 | `Migration failed: the server rejected a statement (SQLSTATE <…>). PostgreSQL rolled back the migration transaction; nothing from it was applied. Resolve the cause (for 55P03 or 57014, wait until the blocking session is gone), then run again.` | The server returned a SQLSTATE inside the migration transaction (`55P03` lock timeout, `57014` statement timeout, or a constraint or syntax error), and PostgreSQL rolled the transaction back | Re-run the gate 2 baseline query (6 rows, no table). Find the cause: a blocking session or a slow statement. Don't raise the limits blindly. Report to the approver; a retry needs the approver's go-ahead under the same gate 2 approval. |
+| **Uncertain outcome** | 5 | `Migration outcome UNKNOWN: the connection failed while migrations were running (<…>). Do not retry yet. Confirm the previous migration session has ended (pg_stat_activity), then inspect drizzle.__drizzle_migrations and the schema to see whether the migration was applied before deciding to run again.` | The connection failed after migrations started (`ECONNRESET`, `EPIPE`, `ETIMEDOUT`, `CONNECTION_CLOSED/ENDED/DESTROYED`, a TLS error mid-run, SQLSTATE class `08` or `57P01`–`57P03`, or no code at all). **The commit may or may not have happened.** | Follow the procedure below. |
+
+The verifier rehearsed these on real PostgreSQL:
+- a terminated migrator backend → exit 5 (`CONNECTION_CLOSED`);
+- `55P03` and `57014` → exit 4;
+- a missing database → exit 3 (`SQLSTATE 3D000`).
+
+#### Uncertain outcome: procedure
+
+1. **Don't retry yet.**
+2. **Confirm the previous migration session has ended.** Read-only, as the
+   service role.
+
+   **Primary check.** The migrator's single connection identifies itself as
+   `verity-migrate`. Its log prints `Migration session
+   application_name=verity-migrate` right after the timeouts line. The API and
+   worker pools use the driver default, `postgres.js`.
+
+   ```sql
+   SELECT pid, state, xact_start, wait_event_type
+     FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND application_name = 'verity-migrate';
+   ```
+
+   **Fallback check:** use this if the migrator's log printed a different name
+   or `(other)` (a pooler didn't pass the name through), or if the log line is
+   missing. Run it anyway when in doubt; it's read-only:
+
+   ```sql
+   -- Sessions that could still be the migrator: touching the migration objects,
+   -- holding a transaction open, or locking reports/report_schedules.
+   SELECT a.pid, a.state, a.xact_start, a.wait_event_type
+     FROM pg_stat_activity a
+    WHERE a.datname = current_database()
+      AND a.usename = current_user          -- the migrator used the service role
+      AND a.pid <> pg_backend_pid()
+      AND (a.query ILIKE '%report_schedules%'
+           OR a.query ILIKE '%__drizzle_migrations%'
+           OR a.state LIKE 'idle in transaction%');
+
+   SELECT l.pid, l.mode, l.granted, c.relname
+     FROM pg_locks l
+     JOIN pg_class c ON c.oid = l.relation
+    WHERE c.relname IN ('reports', 'report_schedules', '__drizzle_migrations')
+      AND l.mode NOT IN ('AccessShareLock', 'RowShareLock', 'RowExclusiveLock')  -- the API's ordinary reads and writes
+      AND l.pid <> pg_backend_pid();
+   ```
+
+   The application name isn't part of the safety gate: a different name never
+   refuses the run. That's why the fallback matches on the migration objects,
+   open transactions and strong locks (the migrator holds
+   `ShareRowExclusiveLock` on `reports` while adding the foreign key).
+   Report counts and states only, never query text or client addresses. The
+   session has ended when the primary check returns no rows and the fallback
+   shows no migrator session (no transaction open on the migration objects, no
+   strong lock held on them). If one is
+   still there, wait and check again. Ending it with `pg_terminate_backend` is
+   a write and needs its own approval.
+3. **Inspect the history and the schema** (read-only):
+
+   ```sql
+   SELECT count(*) AS rows,
+          max(created_at) AS newest_created_at,
+          (SELECT hash FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 1) AS newest_hash
+     FROM drizzle.__drizzle_migrations;
+   SELECT to_regclass('public.report_schedules');
+   ```
+
+4. **Decide with the approver.** Only these outcomes are allowed:
+
+   | History | `report_schedules` | Meaning | Next step |
+   | --- | --- | --- | --- |
+   | 6 rows, newest `1791095104295` / `1d6f3b18…`, hashes as in item 2 | `NULL` | Rolled back or never started | A retry is allowed **under the same gate 2 approval**, once the approver agrees and step 2 confirmed no session remains |
+   | 7 rows, newest `1792236058949` / `abf91261…` | exists | Committed | Don't retry. Go to gate 3 (its own approval) |
+   | Anything else (6 rows with the table, 7 rows without it, other counts or hashes) | — | Unexpected state | **Stop.** Report to the approver; no further write without a new approval |
+
 ## Gate 3: post-migration verification (read-only)
 
-**Approval:** part of gate 2, but its results must be reported before gate 4
-is requested.
+**Approval:** "Approve gate 3: post-migration verification (read-only)."
+Gate 2's approval doesn't include it. Report its results before gate 4 is
+requested.
 
 ```sql
 -- History: seven rows, the newest is 0006 with the expected hash.
@@ -210,26 +384,38 @@ SELECT p, has_table_privilege(current_user, 'public.report_schedules', p)
 Also confirm that the running `cc44449` API still answers `GET /api/v1/health`
 and the running worker keeps polling (logs only).
 
-**Stop** if anything differs. Recovery for a failed migration: the migration is
-one transaction, so a failure leaves 0005 intact. Re-run the gate 2 baseline
-query and report.
+**Stop** if anything differs, and report.
+
+Recovery depends on how gate 2 ended (see "If the migrator doesn't finish
+cleanly"):
+- **Configuration refusal** or **confirmed server-side failure:** nothing
+  committed, so 0005 is intact.
+- **Uncertain outcome:** don't assume either way. The history and schema
+  inspection decides: retry, gate 3, or stop.
+
+A gate 3 result that matches neither 0005 nor the expected 0006 state is a
+stop. Fixing it needs a new approval (a restore or an emergency reversal).
 
 ## Gate 4: merge PR A and deploy the backend (frontend held)
 
-**Approval:** "Merge PR A." It must name the PR and its head SHA.
+**Approval:** "Approve gate 4: merge PR A at `<head SHA>`." The SHA must be
+PR A's current head. If PR A changes after the approval, the approval lapses.
 
 1. PR A is reviewed; its head is the commit the approval names; gates 1–3
    passed.
 2. Merge PR A. Railway deploys `verity-api` and `verity-worker` from the merge
    commit. Any Maypop rebuild republishes the unchanged frontend.
-3. Watch both deployments reach success. If `verity-api` fails, roll back (see
-   below) and stop.
+3. Watch both deployments reach success. If either fails or misbehaves,
+   **stop** and report. Roll back (see below) only under its own rollback
+   approval.
 4. Do **not** merge PR B.
 
 ## Gate 5: production smoke writes and worker verification
 
-**Approval:** "Run the production smoke test." The approval names the test
-account, the location used and how the test reports will be retired.
+**Approval:** "Approve gate 5: production smoke test with `<account>`,
+`<location>`, `<retirement plan>`." It names the test account, the location
+used and how the test reports will be retired. Gate 4's approval doesn't
+include it.
 
 1. `GET /api/v1/health` on the new API.
 2. One report **without** a schedule → 201.
@@ -241,7 +427,30 @@ account, the location used and how the test reports will be retired.
 
 ## Gate 6: publish the new frontend
 
-**Approval:** "Merge PR B / publish the frontend." Only after gate 5 passed.
+**Approval:** "Approve gate 6: merge PR B at `<head SHA>` and publish the
+frontend." Request it only after gate 5 passed and PR B has been reconciled
+with `main` (below). The SHA must be PR B's head after reconciliation.
+
+Before requesting approval:
+
+1. **Reconcile PR B with the current `main`.** PR A's merge moved `main`.
+   Change PR B's base on GitHub from `release/backend` to `main` (GitHub may
+   do this itself if `release/backend` is deleted after the merge). Either
+   merge `main` into PR B or rebase it onto `main` (push without force: prefer
+   the merge), then re-run `npm run check` and the Playwright suites on the
+   result.
+2. **Re-check that PR B is frontend-only.** The diff against `main` may touch
+   only `apps/web/**`:
+
+   ```sh
+   git fetch origin
+   git diff --name-only origin/main...<PR B head> | grep -v '^apps/web/'   # must print nothing
+   ```
+
+   **Stop** if anything outside `apps/web/` appears. That code was never part
+   of gates 2–5 and would deploy to Railway with PR B.
+
+After approval:
 
 1. Merge PR B (Railway redeploys the API and worker with unchanged API code;
    the worker restart is lease-safe).
@@ -256,8 +465,9 @@ account, the location used and how the test reports will be retired.
 
 ## Gate 7: any paid verification run
 
-**Approval:** "Run paid verification" with explicit budgets (for example
-search 3, extract 4, Agent 0) and a time window. Set the worker variables,
+**Approval:** "Approve gate 7: paid verification with budgets `<…>` from
+`<start>` to `<end>`." It states explicit budgets (for example search 3,
+extract 4, Agent 0) and a time window. Set the worker variables,
 observe, and set them back to `0` afterwards. V2 (Agent reads after the
 extraction slots are used) stays deferred.
 
@@ -265,13 +475,13 @@ extraction slots are used) stays deferred.
 
 | Situation | Action | Schema |
 | --- | --- | --- |
-| Frontend misbehaves after gate 6 | Republish the previous Maypop build, or revert PR B on `main` (with approval). Unpublishing the frontend first is always safe: old frontends never send a schedule | Keep 0006 |
-| API or worker fails after gate 4 | Railway: redeploy the previous deployment (`cc44449`) for both services. If the new frontend is already live, schedule-bearing reports get the "doesn't accept scheduled times yet" message; everything else works | Keep 0006: the old code ignores `report_schedules` |
-| Bad data or migration problem | Stop and report. Restore from the gate 2 backup only with explicit approval | — |
+| Frontend misbehaves after gate 6 | With "Approve rollback of the frontend to `<build>`": republish the previous Maypop build, or revert PR B on `main`. Unpublishing the frontend first is always safe: old frontends never send a schedule | Keep 0006 |
+| API or worker fails after gate 4 | With "Approve rollback of the API and worker to `cc44449`": in Railway, redeploy the previous deployment (`cc44449`) for both services. If the new frontend is already live, schedule-bearing reports get the "doesn't accept scheduled times yet" message; everything else works | Keep 0006: the old code ignores `report_schedules` |
+| Bad data or migration problem | Stop and report. Restore from the gate 2 backup only with "Approve restore from the gate 2 backup." | — |
 
 Rollback restores compatible application builds and **retains 0006**.
-Removing it deletes every reporter's schedule claim, so it needs a **separate
-emergency approval**, and only after no deployed code uses the table:
+Removing it deletes every reporter's schedule claim, so it needs its own
+approval, "Approve emergency reversal of 0006.", and only after no deployed code uses the table:
 
 ```sql
 -- EMERGENCY ONLY, separately approved. Deletes all reporter schedule claims.
