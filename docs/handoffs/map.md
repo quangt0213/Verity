@@ -8,6 +8,10 @@ Git, code and tests win over this file.
 **REVIEW.** M0–M5 are done. Two requests for other owners are open (see
 "Requests to lead"). Nothing is pushed, merged or deployed.
 
+**Round 2 (branch `team/map-build-r2`, from PR #7 head `c0264c3`):** release
+path and publication hold. Investigation only, so this is a docs-only commit.
+See "Round 2: release path and publication hold" at the end.
+
 ## Goal
 
 The user's complaints: new places load slowly after a pan or fly-to; parks,
@@ -291,3 +295,122 @@ Plan for a 3D mode:
    `PERF_STYLES`, `PERF_SHOTS_DIR` and `PERF_DEVICE=mobile`.
 3. Once the lead applies request 1, re-run `-g "overhead|pans"` and compare it
    with the "after" row above.
+
+## Round 2: release path and publication hold (2026-10-17)
+
+The question: merging PR #7 to `main` deploys the new API and worker and may
+also rebuild Maypop. How do we keep the new frontend unpublished until the new
+API is serving? Every check below was local or a read-only `gh api` GET. Nothing
+was pushed, and no Railway, Maypop or GitHub setting was changed.
+
+### Why it matters: the hazard is narrow
+
+- Between `cc44449` and `c0264c3`, the only contract change the frontend relies
+  on is `reportEventInputSchema`. It gains optional `scheduled_start_at` and
+  `scheduled_end_at`, accepted only for planned categories. Response schemas are
+  unchanged, and `apps/web/src/api/http-client.ts` is unchanged.
+- New frontend with the old API: browsing, detail, sign-in and reports without
+  a schedule all work. A planned-event report **with** a schedule is rejected,
+  because the old API's strict schema returns 400. The error is visible, and
+  nothing is lost silently.
+- The window lasts from the Maypop publish until the new API is healthy. If the
+  Railway deploy fails, the window lasts until it is fixed. `ea7058e` and
+  `053eade` both ended in `failure` for the API service.
+
+### Evidence
+
+| # | Fact | Source | Status |
+| --- | --- | --- | --- |
+| 1 | No Railway config-as-code exists: no `railway.json`, `railway.toml`, nixpacks or Procfile. No `.github/workflows` either (`actions/workflows` total_count 0). | `git ls-files`; `gh api .../actions/workflows` | Verified |
+| 2 | The only Dockerfile is `apps/api/Dockerfile`, not at the repository root. It builds from the root and its `CMD` is `node dist/server.js` (the API only). | `apps/api/Dockerfile` | Verified |
+| 3 | The worker has no `CMD`. The repository defines it only as `start:worker` = `node dist/worker.js` (`apps/api/package.json`). The README says "same image as the API, different command". The worker service's actual start command, Dockerfile path and root directory are Railway service settings. | `apps/api/package.json`, README "Verification worker" | Repo: verified. Railway settings: **operator-confirm** |
+| 4 | Railway created GitHub deployments only for `main` merge commits `ea7058e`, `053eade` and `cc44449`, all to the environment `Verity / production`, created by `railway-app[bot]`. PR branch heads (`877f211`, `1c9ecd9`, `06fd9a0`, `7e98183`) have no statuses. | `gh api .../deployments`, `.../commits/<sha>/status` | Verified |
+| 5 | Two Railway services report commit statuses on `main`: `Verity - verity-api` (on all three merges; `failure` on `ea7058e` and `053eade`) and `Verity - verity-worker` (first on `cc44449`, `success`). So a merge to `main` deploys both. The `cc44449` deployment record was updated again on 10-13 and 10-17, which looks like redeploys of the same commit. | `.../commits/<sha>/status`, `.../deployments/<id>/statuses` | Verified (that both services deploy from `main`) |
+| 6 | Railway watch paths and "wait for CI" settings are not visible. It's unknown whether a docs-only or frontend-only merge also redeploys the API and worker. History is consistent with "every `main` merge". | none in repo | **Operator-confirm** |
+| 7 | `main` has no branch protection; there are no environment protection rules and no auto-merge. PR #7 is an open draft with base `main` and mergeable state `clean`. | `.../branches/main/protection` (404), `.../environments`, `.../pulls/7` | Verified |
+| 8 | Maypop leaves **no trace in GitHub**: no repository webhooks (`/hooks` returns `[]`), no deployments, no commit statuses and no check runs on any `main` commit. If it imports through a GitHub App, that installation isn't visible to the repository API. | `gh api .../hooks`, statuses and check runs | Verified (absence) |
+| 9 | `maypop.toml` declares only `[app]` metadata and `[build]` (`framework = "vite"`, `command = ["npm","run","build:web"]`, `output = "apps/web/dist"`, `entry = "index.html"`). It has no branch, publish, auto-deploy or base-path key. None is documented in the SDK README, `docs/MAYPOP.md` or `maypop.ai/llms.txt`. Whether the GitHub importer reads `maypop.toml` at all is unverified (`docs/MAYPOP.md`). | `maypop.toml`, SDK README, llms.txt | Verified (repo); importer behaviour **operator-confirm** |
+| 10 | Whether Maypop auto-rebuilds or auto-publishes on push to `main`, and from which branch, is a Maypop project setting. | none | **Operator-confirm** |
+| 11 | `VITE_VERITY_DATA_SOURCE` and `VITE_VERITY_API_URL` are baked in at build time and also feed the CSP's `connect-src`. No `.env.production` is committed. A production build without them shows "not connected" and never demo data (`config/env.ts`, `env.test.ts`). **Every Maypop rebuild therefore depends on those build variables still being set in Maypop.** | `apps/web/src/config/env.ts`, `git ls-files` | Repo: verified. Maypop build variables: **operator-confirm** |
+| 12 | The deployed frontend (`apps/web` exactly as at `cc44449`) builds and tests green against PR #7's contracts and API. Trial: `apps/web` restored to `cc44449` (added files removed) on top of `c0264c3`; root `npm run check` exit 0 (contracts 54, api 665 passed / 13 skipped, web 89). The trial was reverted afterwards. | local trial | Verified |
+| 13 | The production build's chunk and asset URLs are all relative to `import.meta.url` (`base: "./"`). In 9 files there are 18 hashed references, all resolving to files in `dist`, and no absolute `/assets/` path. The MapLibre worker is loaded through `new URL("maplibre-worker-....js", import.meta.url)`, which is same-origin. | `npm run build -w @verity/web` plus a reference scan | Verified |
+| 14 | The CSP is the `<meta>` in `index.html`, not in `maypop.toml`. With an API URL set: `script-src 'self' https://*.maypop.ai`, `worker-src 'self' blob:`, `connect-src 'self' https://*.maypop.ai <api origin> https://tiles.openfreemap.org`. These cover lazy chunks, the worker, tiles, glyphs and sprites, and the API. No chunk uses `WebAssembly`. MapLibre's worker `eval` path is `importScriptInWorkers`, which Verity never calls. | `dist/index.html`, grep of `dist/assets` | Verified |
+| 15 | A `<meta>` CSP doesn't govern dedicated workers: a worker uses its own response's CSP header. If Maypop's host sends a CSP header on `.js` files that restricts `connect-src`, the worker's tile fetches could be blocked. Neither vite preview nor the e2e host sends one. | platform behaviour; `docs/MAYPOP.md` (host CSP undocumented) | **Operator-confirm** on the first publish (release step 6.2) |
+
+### Hold mechanisms evaluated
+
+| Option | How | Verified? | Risks |
+| --- | --- | --- | --- |
+| (a) Operator holds Maypop publication | Disable auto-publish or rebuild (or don't import) before the merge. Publish after step 4 of the deployment order. | **No.** It's unknown whether the setting exists or how it behaves (facts 8–10). | Depends on an invisible setting. If Maypop never auto-publishes, no hold is needed. If it does and the setting is missed, the hazard window opens. |
+| (b) `maypop.toml` points at a release branch | Add a branch key. | **No.** No such key is documented, and the importer may not read `maypop.toml` at all. | An unknown key may be ignored or may break the import. **Not recommended.** |
+| (c) Two-PR split | PR A: PR #7 with `apps/web` exactly as at `cc44449` (contracts, API, worker, migration, docs). PR B: the frontend (`apps/web` from `c0264c3`), merged after the new API is verified. | **Yes.** Fact 12: PR A's tree passes `npm run check`, and its frontend equals the live one, so a Maypop rebuild after PR A only republishes today's frontend. | It's process overhead. PR B's merge also triggers Railway (same API code; worker restarts, which leases make safe), unless watch paths say otherwise (fact 6). Every rebuild still depends on Maypop's build variables (fact 11). |
+| (d) Frontend feature-detects schedule support | The new API reports a capability (for example `features: ["report_schedule"]` on `/api/v1/health`). The report form shows schedule fields only when it's present. | Not implemented. It would touch verifier-owned `routes/public.ts`, `ReportPage.tsx` and the http client. | It is safe in any deploy order **and on rollback** (an API rolled back to `cc44449` hides the fields automatically). The cost is a code change in another owner's files plus tests. Proposal only. |
+
+**Recommendation:**
+
+1. Use **(c), the two-PR split.** It is the only hold that can be verified from
+   the repository, and it needs no code change.
+2. Have the operator also do the read-only checks (a), 6, 10, 11 and 15 before
+   merging PR A.
+3. Treat (d) as optional hardening for a later release; it also makes rollback
+   of the API alone safe.
+
+**If PR #7 is merged as one PR:** that's a **RELEASE BLOCKER** until the
+operator confirms (with evidence) how Maypop publishes after a push to `main`,
+and holds publication.
+
+### Suggested runbook text for WORKSTREAM_STATUS (lead-owned)
+
+> **Release path (verified 2026-10-17):**
+> - Railway deploys **both** `verity-api` and `verity-worker` on every merge to
+>   `main`. PR branches never deploy. There is no config-as-code: the worker's
+>   start command (`node dist/worker.js`, i.e. `npm run start:worker -w @verity/api`)
+>   and the Dockerfile path are Railway service settings.
+> - Maypop leaves no trace in GitHub. Whether and when it rebuilds is unknown
+>   until the operator confirms it.
+>
+> **Hold:** split PR #7 into
+> - **PR A:** backend, contracts, migration and docs, with `apps/web` unchanged
+>   from `cc44449`;
+> - **PR B:** the frontend.
+>
+> **Order:**
+> 1. Apply 0006.
+> 2. Merge PR A. Railway deploys the API and worker; any Maypop rebuild
+>    republishes the current frontend.
+> 3. Verify the API and worker (steps 4–5).
+> 4. Merge PR B. Maypop publishes the new frontend.
+> 5. Verify Maypop (step 6), including the lazy map chunk and tile loads from
+>    the worker under Maypop's own response headers.
+>
+> **Before step 2 (operator, read-only):**
+> - Maypop's auto-publish or rebuild setting and its branch.
+> - Maypop's build variables `VITE_VERITY_DATA_SOURCE` and `VITE_VERITY_API_URL`
+>   are present. Names only: a rebuild without them shows "not connected".
+> - Railway watch paths.
+> - `MIGRATE_ON_START` is not `true`.
+> - The Nimble budgets are `0`.
+
+### Tests
+
+Run:
+
+- `npm run build -w @verity/web`, with an example API URL, plus the dist
+  reference and CSP scan: passed.
+- The split trial: root `npm run check`, exit 0.
+
+Not run:
+
+- The service e2e suite and the San Jose acceptance. Neither the build nor the
+  release changed.
+- Nothing on Railway or Maypop.
+
+### Remaining risks
+
+- Facts 3, 6, 10, 11 and 15 can only be checked by the operator.
+- A Maypop rebuild without its `VITE_*` build variables silently becomes "not
+  connected". This can happen with any merge to `main`, including PR A.
+- Railway API deploys failed on 2 of 3 merges historically. Keep the rollback
+  (redeploy `cc44449`) ready.
+- Open tabs from an older build can 404 on lazy chunks after a publish;
+  `RouteError` offers a reload.
