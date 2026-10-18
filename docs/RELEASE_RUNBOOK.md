@@ -152,7 +152,12 @@ Preconditions, all required:
    the direct host), not the transaction-mode pooler (port 6543), which may not
    keep session settings. The operator confirms which connection is used.
    Expected log line: `Migration timeouts in effect: lock_timeout=5s
-   statement_timeout=1min`.
+   statement_timeout=1min`. A refusal ("did not keep the requested
+   lock_timeout/statement_timeout") means the wrong kind of connection.
+   After a timeout (SQLSTATE `55P03` or `57014`) the whole migration has rolled
+   back: re-run the gate 2 baseline query and retry once the blocking session
+   is gone, without raising the limits blindly. The statement timeout bounds
+   each statement, not the whole run.
 7. **Timing:** a quiet period. Adding the foreign key briefly blocks report
    writes (`SHARE ROW EXCLUSIVE` on `reports`).
 
