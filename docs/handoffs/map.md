@@ -20,6 +20,10 @@ See "Round 2: release path and publication hold" at the end.
 published Maypop v2 frontend, and rollback options. Read-only evidence, docs
 only. See "Round 4: Maypop v2 provenance and rollback" at the end.
 
+**Round 5 (branch `team/map-build-r5`, from `1534ae2`):** the secure local
+backup destination and evidence template for the production `pg_dump` (outside
+Git), plus frontend recovery wording. See "Round 5" at the end.
+
 ## Goal
 
 The user's complaints: new places load slowly after a pan or fly-to; parks,
@@ -688,4 +692,53 @@ Nothing was saved, discarded, reverted, published or unlinked.
   the guard is a separate decision for the owners.
 - Until the gate 6 path is known, treat **"Done →", "Revert", "Discard" and any
   synchronization as publish-adjacent actions that need explicit approval.**
+
+## Round 5: backup destination, evidence, frontend recovery wording (2026-10-18)
+
+Scope: the verifier is the only operator touching production (read-only
+`pg_dump` of `public` and `drizzle`, then a local restore validation). This
+workstream didn't connect to production, didn't use a browser and didn't push
+anything.
+
+### Backup destination (outside Git; nothing in this repository)
+
+All local, checked 2026-10-18 19:41 UTC.
+
+| Check | Result | Status |
+| --- | --- | --- |
+| Folders | `C:\VerityBackups\2026-10-18\` with `archive\` (the dump), `restore\` (the disposable PostgreSQL 17 cluster's data directory and logs, which hold production rows) and `evidence\` | VERIFIED |
+| Outside Git | No `.git` at `C:\` or `C:\VerityBackups` | VERIFIED |
+| Outside OneDrive | The only sync root is the user's OneDrive folder (one business account, no tenant libraries). Desktop, Documents and Pictures are redirected into it; Downloads isn't. `C:\VerityBackups` is under none of them. `C:` is a local fixed NTFS volume | VERIFIED |
+| Access | Inheritance removed. Only the operator account has `(OI)(CI)(F)`, and it owns the folder. Removed: the inherited Administrators, SYSTEM, Users and Authenticated Users entries. SYSTEM isn't needed (the restore cluster runs as the operator), and leaving it out also keeps the search indexer out. Administrators can still take ownership; that's accepted | VERIFIED (icacls) |
+| Disk encryption | `Get-BitLockerVolume` and `manage-bde` need admin. The unelevated shell property gives an uninterpretable `0`. The OS is Windows 11 Home | **UNKNOWN** |
+| Windows Search | Indexed scope covers `C:\Users\`, the Start Menu and Office content only; the indexer account has no access | VERIFIED |
+| File History | Not configured (no configuration folder; service stopped) | VERIFIED |
+| Handling rule | The archive and the restore cluster contain authentication and personal data. Never put them, or any row contents, in screenshots, chat messages or attachments, commits, PRs, docs, build artifacts, the scratchpad or OneDrive. This was sent to the verifier and written at the top of the evidence README | — |
+
+The evidence template is `evidence\README.txt` (outside Git), facts only:
+archive name and format, size, SHA-256 and sidecar; versions from the
+`pg_restore --list` header; the archive creation time; dump start and end
+(UTC); inventory counts by entry type; the restore result per mode; the checks
+(15 tables, key-table counts, 6 migration rows and hashes, `report_schedules`
+absent); and disposal. After the dump, this workstream computes the size and
+SHA-256 and writes `<archive>.sha256`. It reads the archive only by hashing it
+and running `pg_restore --list`, and never extracts data.
+
+### Frontend recovery wording
+
+This supersedes round 4, section 3, step 3. `docs/RELEASE_RUNBOOK.md` gets a
+new "Frontend recovery (Maypop)" section, and its rollback row now points
+there:
+
+- A rebuild of known source (`cc44449`'s `apps/web` plus v2's `env.ts` guard,
+  or PR B's previous head) is a **replacement artifact**, **not a byte-identical
+  restoration of v2**. Building it is verified; publishing it through Maypop is
+  **unverified**.
+- The downloaded v2 copy is **forensic evidence only**. It is incomplete and its
+  `index.html` contains Maypop's injections, so it is **never uploaded or
+  published**. It stays untouched in the scratchpad.
+- A published-version restore and "Revert, then publish" both stay
+  **unverified**.
+- Preserve the editor draft: no Done, Discard, Revert, sync or Unlink without
+  an approval that names the action.
 
