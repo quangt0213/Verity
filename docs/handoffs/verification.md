@@ -4,9 +4,9 @@ Owner: `verifier`. Current branch: `team/verification-r5` (worktree `<worktrees>
 
 ## Status
 
-**Round 5: rehearsal done; production dump NOT taken (waiting for the lead's GO).**
+**Round 5: rehearsal and re-rehearsal (lead's 3 review additions) done; production dump NOT taken (waiting for the lead's GO).**
 - **Plan corrected.** `docs/BACKUP_RESTORE_PLAN.md`: PostgreSQL 17, owners and ACLs kept, same-snapshot counts, restore modes a and b, the DROP guard, and the scope label.
-- **Rehearsal passed** on PG17.11 (synthetic data).
+- **Rehearsal and re-rehearsal passed** on PG17.11 (synthetic data).
 - **Round 4** (integrated): the `claimJobs` claim-limit fix and the direct-host migration connection.
 - **Earlier rounds** (integrated): failure classification and session name (3), paid work opt-in (2). A5 and V2 remain recommendations; V2 stays deferred.
 - Nothing was pushed, merged or deployed. No live Nimble, no production writes, the migrator was never run against production, and production hasn't been connected to in round 5.
@@ -19,7 +19,7 @@ Kept separate from the round 4 concurrency evidence below.
 - **Scripts:** `C:\Users\quang\verity-worktrees\ops-backup\` (not Git; no data, no secrets):
   - `common.mjs`: the shared checks and fingerprint;
   - `backup.mjs`: preflight, snapshot counts, `pg_dump` 17, inventory;
-  - `restore-validate.mjs`: the disposable PG17 server, modes a and b, the guard, every check, and `--guard-selftest`;
+  - `restore-validate.mjs`: the disposable PG17 server (scram-sha-256, in-memory random password, pwfile deleted after `initdb`, no `trust` rule, wrong password must be refused), the guard self-test (always first, same run), modes a and b, and every check;
   - `rehearse-source.mts` and `rehearse-writer.mts`: rehearsal only.
 - **Tools:** `C:\Users\quang\verity-tools\pgsql-17.11\bin` (EDB zip, provided by the lead), used by absolute path.
 - **Destination** (prepared by map-perf): `C:\VerityBackups\2026-10-18\`, with `archive\`, `restore\` (data directory and all logs) and `evidence\` (facts).
@@ -27,7 +27,12 @@ Kept separate from the round 4 concurrency evidence below.
   - the snapshot counts survived 646 concurrent write batches exactly, in both modes;
   - the guard refused 3 negative cases, and its positive control dropped;
   - mode a and mode b both exited 0, and every check passed, including owners and the role fingerprint.
-- **Script defects found by the rehearsal, fixed:** SQLSTATE 42725 (needed `::text` casts in two catalog queries; the preflight failed closed), and a `pg_ctl start` hang on inherited pipes (now no pipes).
+- **Lead review additions, implemented and re-rehearsed: PASS** (plan, "Re-rehearsal after the lead's review"):
+  - preflight RLS visibility fails closed: FORCE RLS on one table stopped the backup before any dump; without it both booleans were true;
+  - restore server: 0 `trust` rules; wrong password refused (auth class, `28P01`); no-password `psql` refused; pwfile deleted;
+  - inventory reports unexpected entry types and non-Verity `public` objects by name without failing (demo: `VIEW public.extra_view`, `public.extra_fn()`; `DEFAULT drizzle.__drizzle_migrations id` is expected);
+  - final end to end with 647 concurrent write batches: archive in `<dest>rchive\`, facts in `<dest>\evidence\`, logs in `<dest>estore\logs\`; both modes and the guard self-test passed. Rehearsal servers stopped and deleted.
+- **Script defects found by the rehearsal, fixed:** SQLSTATE 42725 (`text || "char"` in the constraint fingerprint, fixed with `contype::text`; the preflight failed closed), and a `pg_ctl start` hang on inherited pipes (now no pipes).
 - **Production steps after GO:**
   1. `node backup.mjs --pg-bin <pg17 bin> --dest C:\VerityBackups\2026-10-18 --source production`.
   2. Give map-perf the archive file name (they write the `.sha256`).

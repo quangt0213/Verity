@@ -38,7 +38,7 @@ Supabase project backup.**
 | Credentials | Read in-process from the operator's local `apps/api/.env`, and passed to `pg_dump` only through the child process environment. Never on the command line, in shell history, in a file in the repo or OneDrive, in logs or in chat. |
 | Destination | `C:\VerityBackups\<UTC date>\`, a local disk **outside Git and OneDrive**. Its ACL allows only the operator's account (full control, inheritance removed, no SYSTEM or Administrators). Run `pg_dump`, `initdb` and `pg_ctl` as that user. Layout: `archive\` (the dump and its `.sha256`); `restore\` (the disposable server's data directory and every dump/restore log); `evidence\` (facts only: the backup facts, restore results, and the evidence README). The archive, the restore server and the logs contain authentication and personal data, and restore logs can contain row fragments (COPY error `CONTEXT` lines). Never put them, or any row contents, in screenshots, chat, attachments, commits, PRs, docs, build artifacts, a scratchpad or OneDrive. Reports carry only facts and error classes. |
 | Disk | A few MB today (84 rows in 15 tables at gate 1), plus the restore server (~50 MB). Leave room for 10× growth. |
-| Restore target | A disposable PostgreSQL 17 server: `initdb -U postgres --auth=trust` with its data directory under `<destination>\restore\`, listening on `127.0.0.1` only (port 55433). Every restore goes into a **newly created** database. Never a shared, staging or production database. Never start the API or worker against it. |
+| Restore target | A disposable PostgreSQL 17 server: `initdb -U postgres --auth=scram-sha-256` with a random password generated in memory for this run, passed to `initdb` through a pwfile under `<destination>\restore\` that is deleted right after `initdb`, and afterwards only through the child environment and the driver's connection options (never printed or stored). Its data directory is under `<destination>\restore\`, it listens on `127.0.0.1` only (port 55433), `pg_hba.conf` has no `trust` rule, and the driver checks that a wrong password is refused. One run per destination: the driver refuses an existing data directory. Every restore goes into a **newly created** database. Never a shared, staging or production database. Never start the API or worker against it. |
 
 ## Required roles and ownership (no passwords)
 
@@ -70,6 +70,7 @@ Times in UTC. The script driver is `ops-backup\backup.mjs` (dump) plus `ops-back
    - the 6 `drizzle.__drizzle_migrations` rows matching the runbook's gate 2 table;
    - `to_regclass('public.report_schedules')` is NULL;
    - the `public` table count (15);
+   - **RLS visibility (fail closed):** zero `public`/`drizzle` tables with `relforcerowsecurity`, and the dump role can see every row of every table: it is a member of each table's owner (`pg_has_role(current_user, relowner, 'USAGE')`) or has `rolbypassrls`. Only the two booleans are recorded. Otherwise `pg_dump` could silently dump a filtered subset, so the driver stops before any dump;
    - the catalog fingerprint used later: constraint and index counts by kind, functions, triggers, RLS, policies, owners, and client-role privileges.
 3. **Same-snapshot counts and dump.**
    1. One session runs `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` and `SELECT pg_export_snapshot()`, and counts every table in `public` and `drizzle` inside that transaction.
@@ -83,11 +84,13 @@ Times in UTC. The script driver is `ops-backup\backup.mjs` (dump) plus `ops-back
    3. The exporting transaction ends (ROLLBACK) only after `pg_dump` exits.
 
    Every count and the archive come from one snapshot, so the restored counts must equal them exactly while production keeps writing. Separately timed count queries are never compared. The driver records the start/end UTC and `pg_dump`'s exit code in `<destination>\evidence\backup-facts.json`, writes the archive to `<destination>\archive\`, and writes `pg_dump`'s log to `<destination>\restore\logs\`.
-4. **Checksum and size:** SHA-256 and the byte size, stored next to the archive.
+4. **Checksum and size:** SHA-256 and the byte size, recorded in `backup-facts.json`; the destination owner writes `<archive>.sha256` next to the archive.
 5. **Inventory:** `pg_restore --list` succeeds, and lists:
    - 15 `TABLE` in `public` and 1 in `drizzle`;
-   - 2 `FUNCTION` and 3 `TRIGGER` entries;
+   - 2 `verity_*` `FUNCTION` and 3 `TRIGGER` entries;
    - `ACL` entries.
+
+   It also reports, without failing: the count of entries by type outside the expected set (`SCHEMA`, `TABLE`, `TABLE DATA`, `SEQUENCE`, `SEQUENCE SET`, `SEQUENCE OWNED BY`, `INDEX`, `CONSTRAINT`, `FK CONSTRAINT`, `FUNCTION`, `TRIGGER`, `ACL`, `DEFAULT ACL`, `COMMENT`, `ROW SECURITY`), those entries' type and object name (up to 50), and the names of non-Verity `public` tables and functions (object names only). `DEFAULT drizzle.__drizzle_migrations id` (the serial column default) is expected there.
    This proves the file is readable, **not** that it restores.
 6. **Restore, two modes**, each into a new database on the disposable PG17 server:
    - **(a) Data validation:** `createdb verity_data`, the guarded `DROP SCHEMA public` (below), then `pg_restore --no-owner --no-privileges --exit-on-error -d verity_data`.
@@ -101,7 +104,7 @@ Times in UTC. The script driver is `ops-backup\backup.mjs` (dump) plus `ops-back
    - `data_directory` is under `<destination>\restore\`;
    - `public` contains zero relations and zero functions.
 
-   It aborts otherwise. There is no DROP anywhere else.
+   It aborts otherwise (a connection failure while inspecting also refuses). There is no DROP anywhere else. Every restore run first self-tests the guard on the same server, before restoring anything: a non-empty `public` and the wrong database must be refused, and a just-created empty database must drop. Any other result stops the run.
 8. **Checks** on both restored databases. Mode a must pass every data check; mode b must pass every check:
    - restore exit 0;
    - 15 tables in `public`, plus `drizzle.__drizzle_migrations`;
@@ -181,7 +184,15 @@ The result matches gate 1's production facts: 15 tables, RLS 15/15, 0 policies, 
   - `service_role`: all 7 table privileges on 15 tables, schema USAGE, and EXECUTE on the 2 functions (as granted in this source);
   - the whole role fingerprint equals the source's.
 
-**Scripts:** `ops-backup\backup.mjs` and `ops-backup\restore-validate.mjs` (outside Git). Defects found and fixed during the rehearsal: two catalog queries needed explicit casts (SQLSTATE 42725, so the preflight failed closed), and `pg_ctl start` hung on inherited pipes. Both rehearsal servers and their data were deleted afterwards.
+**Re-rehearsal after the lead's review (same day, PG17.11, new synthetic source, final scripts):**
+- **RLS visibility, negative:** with `ALTER TABLE public.events FORCE ROW LEVEL SECURITY` on the source, the preflight reported `noForcedRls: false` and stopped ("a table has FORCE ROW LEVEL SECURITY"); no archive was written. **Positive:** after `NO FORCE`, `noForcedRls` and `allRowsVisibleToDumpRole` were both true and the backup passed.
+- **Unexpected entries:** a copy of the source with an extra view and function gave 144 entries, `unexpectedByType` `{"VIEW":1,"DEFAULT":1}`, the entries `VIEW public.extra_view` and `DEFAULT drizzle.__drizzle_migrations id`, non-Verity function `public.extra_fn()`, 2 `verity_*` functions, and still PASS (reported, not failed).
+- **End to end:** a writer committed 647 batches. Snapshot exported 22:45:04.418Z; `pg_dump` ran 22:45:08.424–08.590Z. Snapshot counts `reports` 740 and `rate_limit_counters` 728, against 1305 and 1293 live afterwards. Archive 363,423 bytes in `<destination>\archive\`; inventory 140 entries (15/1 tables, 2 functions, 3 triggers, 18 `ACL`, 3 `DEFAULT ACL`, unexpected only `DEFAULT`:1); facts in `<destination>\evidence\backup-facts.json`, the `pg_dump` log in `<destination>\restore\logs\`.
+- **Restore server auth:** PG 17.11 on port 55433, `scram-sha-256`, 0 `trust` rules in `pg_hba.conf`; a wrong password was refused with the auth class (`28P01`); an external `psql` with no password was refused ("no password supplied"); the pwfile was deleted and none remained.
+- **Guard self-test** (same run): non-empty `public`, wrong database and the other server refused; positive control dropped.
+- **Restore (a) and (b):** exit 0, every check passed, 0 count mismatches; mode b roles and owners as above, `ownersEqual`, `clientRolesNoTablePrivileges` and `roleFingerprintEqual` true. Results in `<destination>\evidence\restore-results-<stamp>.json`.
+
+**Scripts:** `ops-backup\backup.mjs` and `ops-backup\restore-validate.mjs` (outside Git). Defects found and fixed during the rehearsals: a catalog query concatenated `text || "char"` (SQLSTATE 42725, so the preflight failed closed; fixed with `contype::text`), and `pg_ctl start` hung on inherited pipes. All rehearsal servers and their data were deleted afterwards; no PG17 process remains.
 
 **What production can still change:** additional Supabase role names in ACLs (derived from the archive, not assumed), different `service_role` grants (compared to production's own fingerprint, not to this rehearsal), and the data size.
 
@@ -191,11 +202,12 @@ Gate 2 stays blocked on any failure below.
 
 | Failure | Meaning | Next step |
 | --- | --- | --- |
-| Preflight fails (TLS, IPv6 reachability, history mismatch, `report_schedules` present) | Nothing was dumped | Fix the connection or stop; rerun under the same backup approval |
+| Preflight fails (TLS, IPv6 reachability, history mismatch, `report_schedules` present, FORCE RLS or a table the dump role can't fully see) | Nothing was dumped | Fix the connection or stop; rerun under the same backup approval |
 | `pg_dump` can't connect, or TLS fails | Nothing was dumped | Fix the connection settings; rerun under the same backup approval |
 | `pg_dump` errors mid-dump, or exits non-zero | The file is incomplete | Delete the partial file; rerun under the same backup approval |
 | Inventory fails | The file is unreadable | Delete it; take a new dump |
 | Restore (a) or (b) fails | The backup is not usable as-is | Report the error class. Don't accept inventory-only without the approver's explicit, recorded risk acceptance |
 | Counts differ from the snapshot counts | A bad dump, or a defect in the procedure (with one snapshot, writes can't explain it) | Investigate before any re-dump |
 | Role or privilege fingerprint differs (mode b) | The restore doesn't reproduce production's security state | Report the difference; the data backup (mode a) may still be usable, as the approver decides |
-| The DROP guard refuses | The target isn't the disposable database | Stop and investigate; never bypass the guard |
+| The DROP guard refuses, or its self-test fails | The target isn't the disposable database, or the guard is broken | Stop and investigate; never bypass the guard |
+| Restore server auth check fails (a `trust` rule, or a wrong password accepted) | The restore cluster isn't protected | Stop the server; don't restore |
