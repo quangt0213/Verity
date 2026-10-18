@@ -7,7 +7,10 @@ import {
   MIGRATION_EXIT_CODES,
   MIGRATION_TIMEOUT_DEFAULTS,
   MigrationGateError,
+  MIGRATOR_APPLICATION_NAME,
+  migratorConnectionParameters,
   parseShownDuration,
+  printableApplicationName,
   runMigrations,
   timeoutsInEffect,
 } from "../src/db/migrate-runner";
@@ -181,9 +184,26 @@ describe("migration timeouts (db:migrate only)", () => {
     expect(timeoutsInEffect({ lockTimeout: "", statementTimeout: "garbage" }, wanted)).toBe(false);
   });
 
+  it("names the migrator's session 'verity-migrate' alongside its timeouts (migrator connection only)", () => {
+    expect(MIGRATOR_APPLICATION_NAME).toBe("verity-migrate");
+    expect(migratorConnectionParameters({ lockTimeoutMs: 5_000, statementTimeoutMs: 60_000 })).toEqual({
+      application_name: "verity-migrate",
+      lock_timeout: 5_000,
+      statement_timeout: 60_000,
+    });
+  });
+
+  it("logs a server-reported application_name only when it looks like a name", () => {
+    expect(printableApplicationName("verity-migrate")).toBe("verity-migrate");
+    expect(printableApplicationName("pgbouncer_rewritten.1")).toBe("pgbouncer_rewritten.1");
+    expect(printableApplicationName(`x ${SECRET_URL}`)).toBe("(other)");
+    expect(printableApplicationName("")).toBe("(other)");
+    expect(printableApplicationName(undefined)).toBe("(other)");
+  });
+
   it("migrates an embedded (PGlite) database without timeouts", async () => {
     const messages: string[] = [];
-    expect(await runMigrations({ url: "pglite:memory", ca: null, timeouts: MIGRATION_TIMEOUT_DEFAULTS, log: (m) => messages.push(m) })).toEqual({ lockTimeout: null, statementTimeout: null });
+    expect(await runMigrations({ url: "pglite:memory", ca: null, timeouts: MIGRATION_TIMEOUT_DEFAULTS, log: (m) => messages.push(m) })).toEqual({ lockTimeout: null, statementTimeout: null, applicationName: null });
     expect(messages).toEqual(["Embedded database: migration timeouts not applicable."]);
   });
 });

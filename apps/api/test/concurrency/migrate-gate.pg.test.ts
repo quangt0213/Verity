@@ -42,7 +42,7 @@ describe.skipIf(!target)("migration gate on real PostgreSQL", () => {
     const upTo0005 = migrationsUpTo("0005_extract_count_agent_resource");
     folders.push(upTo0005);
     // The gate itself applies 0000-0005 and reports the effective settings.
-    expect(await migrateTo(upTo0005)).toEqual({ lockTimeout: "5s", statementTimeout: "1min" });
+    expect(await migrateTo(upTo0005)).toEqual({ lockTimeout: "5s", statementTimeout: "1min", applicationName: "verity-migrate" });
   }, 120_000);
 
   afterAll(async () => {
@@ -79,7 +79,10 @@ describe.skipIf(!target)("migration gate on real PostgreSQL", () => {
   });
 
   it("applies 0006 once the lock is gone, with the bounds still in effect", async () => {
-    expect(await migrateTo(MIGRATIONS, { lockTimeoutMs: 2_000, statementTimeoutMs: 30_000 })).toEqual({ lockTimeout: "2s", statementTimeout: "30s" });
+    const messages: string[] = [];
+    const result = await runMigrations({ url, ca: null, timeouts: { lockTimeoutMs: 2_000, statementTimeoutMs: 30_000 }, migrationsFolder: MIGRATIONS, log: (m) => messages.push(m) });
+    expect(result).toEqual({ lockTimeout: "2s", statementTimeout: "30s", applicationName: "verity-migrate" });
+    expect(messages).toEqual(["Migration timeouts in effect: lock_timeout=2s statement_timeout=30s", "Migration session application_name=verity-migrate"]);
     expect(await hasSchedules()).toBe(true);
     expect(await history()).toBe(7);
   });
@@ -120,8 +123,15 @@ describe.skipIf(!target)("migration gate on real PostgreSQL", () => {
       // Wait until the migrator is blocked on the lock, then end its session like an outage would.
       let terminated = false;
       for (let i = 0; i < 100 && !terminated; i++) {
-        const waiting = await admin`select pid from pg_stat_activity where datname = ${name} and wait_event_type = 'Lock' and query ilike '%lock_probe%'`;
+        // The runbook's primary filter: the migrator's own session name.
+        const waiting = await admin`select pid from pg_stat_activity where datname = ${name} and application_name = 'verity-migrate' and wait_event_type = 'Lock'`;
         if (waiting.length > 0) {
+          // The fallback filter (query text and locks) finds the same session.
+          const byText = await admin`select pid from pg_stat_activity where datname = ${name} and wait_event_type = 'Lock' and query ilike '%lock_probe%'`;
+          expect(byText.map((r) => r.pid)).toEqual(waiting.map((r) => r.pid));
+          // Other sessions (the lock holder and this probe) don't carry the name.
+          const named = await admin`select count(*)::int as n from pg_stat_activity where datname = ${name} and application_name = 'verity-migrate'`;
+          expect(named[0]!.n).toBe(1);
           await admin`select pg_terminate_backend(${waiting[0]!.pid})`;
           terminated = true;
         } else await new Promise((resolve) => setTimeout(resolve, 100));
