@@ -16,6 +16,10 @@ See "Round 2: release path and publication hold" at the end.
 `b0502e3` merged):** corrections to `docs/RELEASE_RUNBOOK.md`. Docs only. See
 "Round 3: runbook corrections" at the end.
 
+**Round 4 (branch `team/map-build-r4`, from `d63c448`):** provenance of the
+published Maypop v2 frontend, and rollback options. Read-only evidence, docs
+only. See "Round 4: Maypop v2 provenance and rollback" at the end.
+
 ## Goal
 
 The user's complaints: new places load slowly after a pan or fly-to; parks,
@@ -493,3 +497,110 @@ pushed, and no hosting, Railway, Maypop or GitHub setting changed.
 
 None run; the change is docs only. The merged migrator code is the
 verifier's, already tested on `team/verification-r3`.
+
+## Round 4: Maypop v2 provenance and rollback (2026-10-18)
+
+Read-only round. Nothing was published, built on Maypop, logged in, pushed or
+changed.
+
+- The published v2 files were downloaded with the user's approval (lead,
+  09:04:55 UTC) and treated as data. Nothing in them was executed; the analysis
+  scripts only read them.
+- `cc44449` was rebuilt in a throwaway worktree, which was then deleted:
+  `npm ci`, then `npm run build:web` with only `VITE_VERITY_DATA_SOURCE=api`
+  and `VITE_VERITY_API_URL=<the published origin>`.
+- The API origin isn't recorded in this file.
+
+Labels: **VERIFIED** = observed directly; **INFERRED** = follows from the
+evidence but isn't proven; **UNVERIFIED** = needs the Maypop UI or an
+authenticated tool.
+
+### 1. Artifact identity
+
+| # | Finding | Status |
+| --- | --- | --- |
+| 1 | The 8 downloaded files match the lead's sizes and SHA-256 prefixes. | VERIFIED |
+| 2 | 5 of 8 files are byte-identical to the local `cc44449` build: `theme-init.js`, `favicon.svg`, `maplibre-e7niSQfE.js`, `maplibre-worker-DRFeyNJw.js`, `maplibre-B8-mEBLf.css`. So the dependency versions are the lockfile's (a no-lockfile build changes all three MapLibre files). | VERIFIED |
+| 3 | `index.html` is Verity's template **rewritten by Maypop**, with these additions: an inline `<style>` (`overscroll-behavior: none`) and two inline scripts (activity ping, ambient palette for the host) placed **before** Verity's CSP `<meta>`; `?v=<uuid>` on every asset URL; and a `modulepreload` for the MapLibre chunk. Apart from those and the two hashed names, the file equals the local build. Because the inline scripts precede the CSP meta, the policy doesn't apply to them (meta CSP covers only later content). | VERIFIED (contents); INFERRED (CSP ordering effect) |
+| 4 | `index-DlJ20-aH.css` vs local `index-iIGF2htJ.css`: 552 vs 547 rules. **5 extra utilities** (`.invisible`, `.contents`, `.table`, `.lowercase`, `.transition`) and different last digits in the generated `lab()` colour fallbacks. Nothing removed. Tailwind generates classes from words in scanned files, so v2 scanned extra content. A build with the working directory at the repository root does not reproduce it (tested). | VERIFIED (diff); INFERRED (cause: extra scanned files and a different toolchain or platform) |
+| 5 | `index-vxnSeROL.js` vs local `index-CQrri2b3.js`: same embedded library versions (zod 4.6.5, React 19.3.0). Same baked environment keys (`BASE_URL, DEV, MODE, PROD, SSR, VITE_VERITY_API_URL, VITE_VERITY_DATA_SOURCE`), mode `production`. The API URL is identical to the origin used locally. Exactly **one new literal string**, from an extra branch in the config resolver: `"API mode requires a Verity service URL; demo data is disabled."` (data source `api` without a URL shows "not connected"). Every other string difference is minifier renaming. The Maypop SDK lazy chunk is referenced as `./dist-Bnt1kR_e.js`; locally it is `./dist--uvTvYID.js`. | VERIFIED |
+| 6 | That string exists in **no Git object of this repository**: all branches and remotes, reflogs, stashes, and unreachable blobs were searched. | VERIFIED |
+| 7 | Closest committed source: `cc44449` (identical bundle for every `main` merge from `8d65aba` to `cc44449`), plus an uncommitted change to `apps/web/src/config/env.ts`. It was built somewhere other than this machine's checkouts, from a tree with extra Tailwind-scanned content. | INFERRED |
+| 8 | User's OneDrive checkout (read-only: `git status`, ignored names, file names and mtimes): branch `fix/api-dockerfile` at `877f211`, clean. No dist contains `index-vxnSeROL.js`. `apps/web/dist` (2026-10-10 12:01 -07:00) has `index-BDZKbHtc.js` and `index-iIGF2htJ.css`, a no-environment build; `dist-e2e` and `dist-e2e-service` date from 2026-10-04. Its only Git remote is `origin` (github.com); there is no Maypop remote. Its `.maypop/` holds dev-server state only (`local/config.json`, `drive/`, `.lock`). | VERIFIED |
+| 9 | The second repo copy "under Documents" wasn't found. No `maypop.toml`, `0006_report_schedules.sql` or `index-vxnSeROL.js` exists under the user profile outside these worktrees (depth 9, excluding `AppData`, `node_modules`, `.git`). I asked the verifier for the exact path. | UNVERIFIED |
+
+### 2. Publication method and rebuild triggers
+
+- **Maypop CLI 0.5.1 help** (no auth). VERIFIED that the help says:
+  - `init`: "Create an app and configure its Git remote and framework adapter";
+  - `publish`: "Build the app and publish it with the current Git HEAD" (option `--changelog`: "release note for this version");
+  - `reference import`: "Import the released source under `.maypop/local/references`";
+  - `app apply`: "Apply the [app] table from maypop.toml";
+  - `status` here reports "Authenticated: no".
+
+  INFERRED from that wording: Maypop keeps a Git remote per app and publishes numbered versions with their source, so v2's source may be retrievable from Maypop. UNVERIFIED: whether it is retrievable, and by whom.
+- **SDK README** (VERIFIED): `.maypop/kv-policy.json` is "applied with each published version"; "`maypop init` records the matching build adapter in `maypop.toml`, and `maypop publish` builds and uploads its static output".
+- **Public docs** (VERIFIED, 2026-10-18; `maypop.ai/llms.txt`, `/`, `/landing/challenge/`, `sitemap.xml`): they say only "It's live the moment you make it. No servers to deploy." and "Every change shows up for everyone at once." There is nothing about GitHub connections, studio or editor sync, versions, rollback, drafts, or "your changes are not live".
+- **UNVERIFIED, don't infer "manual only":** what "GitHub connected" does; whether the editor syncs from or to GitHub; whether pushes rebuild or publish; what "your changes are not live" refers to.
+- The v2 bundle's source isn't in GitHub (finding 6), so v2 was **not** a plain build of a GitHub commit. INFERRED; the candidates are an edited Maypop-side workspace or a local uncommitted tree.
+
+### 3. Rollback options
+
+| Candidate | What it is | Status | Notes |
+| --- | --- | --- | --- |
+| Maypop version history (v1, v2) | Maypop's own record of published versions | UNVERIFIED (needs the UI) | The only path that restores exactly what Maypop served, if the UI offers restore or republish. |
+| Downloaded v2 files | Byte-exact copy of 8 served files | VERIFIED, but **incomplete** | It lacks the SDK chunk `assets/dist-Bnt1kR_e.js`, which loads only inside the Maypop frame. Its `index.html` is Maypop's rewritten copy (injected scripts, `?v=`), not the build output. Source commit: unknown (not in Git). Keep it as forensic evidence, not as an upload. |
+| Rebuild of `cc44449` | A different artifact | VERIFIED buildable | Functionally the same app. It lacks v2's extra "API mode requires a URL" message and has slightly different CSS. Different hashes. |
+
+**Recommendation:** treat the **Maypop version history** as the rollback, if the
+UI shows v2 as restorable. Before any v3 is published:
+
+1. Record v2's version id, timestamp and any source reference.
+2. With the user's approval, download the missing `assets/dist-Bnt1kR_e.js`, so
+   the preserved copy is complete for forensics.
+
+If the UI offers no restore, the fallback is a **rebuild of a known commit**:
+`cc44449`, or PR B's head after gate 6. Record that it is not byte-identical to
+v2. Never re-upload the downloaded `index.html`: it carries Maypop's injected
+code and version id.
+
+### 4. Build variables in the artifact
+
+- VERIFIED: the baked environment contains `VITE_VERITY_DATA_SOURCE` with mode
+  `api`. `VITE_VERITY_API_URL` is present, non-empty, https and has no trailing
+  slash.
+- VERIFIED: the CSP `connect-src` has 4 sources, including a non-empty API
+  origin. No `VITE_MOCK_WRITES`, `VITE_META_CSP` or any other `VITE_*` key is
+  baked in.
+- UNVERIFIED: how Maypop stores these values (build environment settings vs. a
+  file in the workspace), and whether a rebuild would get the same values.
+
+### 5. What the lead should look at in the Maypop UI
+
+The rule for the whole visit: read only. Don't click Publish, Save, Discard,
+Restore, Revert, Connect or Sync, and close any dialog with Cancel or Escape.
+
+1. **Versions or history:**
+   - list every version (v1, v2): number, timestamp, changelog or note, author,
+     and any commit or source reference;
+   - whether a restore or republish action exists (note it, don't use it);
+   - whether "view source" or "download" is offered for a version.
+2. **Editor or studio ("your changes are not live"):**
+   - what the banner refers to: a draft newer than v2, and its age;
+   - whether a read-only diff or preview of the draft exists;
+   - use the editor's file search (read-only) for `API mode requires a Verity
+     service URL` in `apps/web/src/config/env.ts`. A match identifies the
+     workspace v2 was built from;
+   - note whether the editor tree has files that the GitHub repository doesn't.
+     Those would explain the extra CSS classes.
+3. **Settings:**
+   - the GitHub connection: repository, branch, sync direction (import only, or
+     two-way), last sync time;
+   - build settings: command, output directory, Node version;
+   - environment variable **names** (`VITE_VERITY_DATA_SOURCE`,
+     `VITE_VERITY_API_URL`);
+   - the app origin.
+4. **Publish dialog:** don't open it if opening could publish. If the UI shows a
+   preview of what "Publish" would ship (source or commit), record it without
+   confirming.
+
