@@ -2,6 +2,7 @@ import type { EventCategory, EventStatus } from "@verity/contracts";
 import type { ExtractedPage } from "../verification/enrich";
 import type { NormalizedEvidence } from "../verification/evidence";
 import type { SearchContext } from "../verification/geocoding";
+import type { ScheduleWindow } from "../verification/identity";
 import type { EscalationReason } from "../verification/rules";
 
 /**
@@ -21,8 +22,15 @@ export interface EventForRetrieval {
   title: string;
   summary: string;
   firstSeenAt: Date;
+  /** The ESTABLISHED schedule (events.scheduled_*). Never set from a reporter's claim. */
   scheduledStartAt: Date | null;
   scheduledEndAt: Date | null;
+  /**
+   * Schedules reporters CLAIMED (reports.scheduled_*), oldest report first, at
+   * most a few. Hints for searching and for event-identity matching only:
+   * never an established schedule, never a reason to change status.
+   */
+  reportedSchedules?: ScheduleWindow[];
 }
 
 export type RetrievalStatus =

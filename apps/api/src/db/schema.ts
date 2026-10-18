@@ -236,6 +236,28 @@ export const reports = pgTable(
   ],
 );
 
+/**
+ * The schedule a reporter CLAIMS for a planned event (one row per report,
+ * only when given). A hint for searching and recognizing the event; never
+ * copied to events.scheduled_*, the established schedule the decision rules
+ * use, so a reporter's claim can't move an event's status. A separate table
+ * (not new `reports` columns) so report creation keeps working on a database
+ * that hasn't applied this migration yet. Planned categories only: enforced
+ * by the request schema (reports.category is on the report row).
+ */
+export const reportSchedules = pgTable(
+  "report_schedules",
+  {
+    reportId: uuid("report_id")
+      .primaryKey()
+      .references(() => reports.id, { onDelete: "cascade" }),
+    scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }).notNull(),
+    scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  () => [check("report_schedules_order", sql`scheduled_end_at IS NULL OR scheduled_end_at >= scheduled_start_at`)],
+);
+
 // ---------------------------------------------------------------------------
 // Community signals
 // ---------------------------------------------------------------------------

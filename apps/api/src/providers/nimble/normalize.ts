@@ -4,6 +4,7 @@ import { parseDateValue, type DayZoneSlack, type EvidenceTime } from "../../veri
 import { DEFAULT_POLICY } from "../../verification/policy";
 import type { NormalizedEvidence } from "../../verification/evidence";
 import type { SearchContext } from "../../verification/geocoding";
+import { applyIdentity, checkIdentity, namePatterns, type EventIdentity } from "../../verification/identity";
 import { classifyOfficial, OFFICIAL_SOURCES, type OfficialSource } from "../../verification/official-sources";
 import { classifyStance } from "../../verification/stance";
 import { matchLocation, selectExcerpt } from "../../verification/text-evidence";
@@ -20,7 +21,8 @@ import type { SearchResultItem } from "./client";
  *  - publishedAt comes only from a returned publication-date field, else null
  *    (never the retrieval time);
  *  - the quote is a verbatim sentence from the returned text, else null;
- *  - stance is classified on that sentence only, conservatively (stance.ts).
+ *  - stance is classified on that sentence only, conservatively (stance.ts);
+ *  - a result that is not about THIS event (identity.ts) takes no stance.
  */
 
 const DATE_FIELDS = ["publish_date", "published_date", "published_at", "date_published", "publication_date"];
@@ -51,6 +53,8 @@ export function normalizeResult(
     requestId: string | null;
     now: Date;
     registry?: readonly OfficialSource[];
+    /** Is a result about THIS event (identity.ts)? Without it, only category words and place are checked. */
+    identity?: EventIdentity;
   },
 ): Normalized {
   const canonical = canonicalizeUrl(item.url);
@@ -62,12 +66,13 @@ export function normalizeResult(
   const official = classifyOfficial(canonical.url, input.category, input.registry ?? OFFICIAL_SOURCES);
   const domain = publisherDomain(canonical.url);
   const publisher = official?.organization ?? domain ?? new URL(canonical.url).hostname;
-  const excerpt = selectExcerpt(text, input.category, input.context);
-  const stance = excerpt ? classifyStance(excerpt, input.category) : "context";
+  const names = namePatterns(input.identity);
+  const excerpt = selectExcerpt(text, input.category, input.context, names);
+  const stance = excerpt ? classifyStance(excerpt, input.category, names) : "context";
   const locationMatch = matchLocation([title ?? "", excerpt ?? ""].join(". "), input.context);
   const published = parsePublishDate(item.additional_data ?? null, input.now);
 
-  const evidence: NormalizedEvidence = {
+  const found: NormalizedEvidence = {
     id: null,
     canonicalUrl: canonical.url,
     originalUrl: canonical.changed ? item.url.slice(0, 2048) : null,
@@ -97,10 +102,13 @@ export function normalizeResult(
     query: input.query.slice(0, 300),
     providerRequestId: input.requestId,
   };
+  // Not about THIS event (another festival, place, date or edition): kept as context only.
+  const returned = [item.content, item.description].filter(Boolean).join("\n");
+  const evidence = input.identity ? applyIdentity(found, checkIdentity({ title, excerpt, text: returned, locationMatch }, input.identity)) : found;
   // "Usable" for cost analysis: a stance, a located mention and a publication time.
-  const located = locationMatch === "exact" || locationMatch === "near";
-  const usable = stance !== "context" && located && published !== null;
+  const located = evidence.locationMatch === "exact" || evidence.locationMatch === "near";
+  const usable = evidence.stance !== "context" && located && published !== null;
   // "Promising": relevant enough that reading the page (Extract) may complete it.
-  const promising = stance !== "context" || located;
+  const promising = evidence.identity !== "mismatch" && (evidence.stance !== "context" || located);
   return { ok: true, evidence, usable, promising };
 }

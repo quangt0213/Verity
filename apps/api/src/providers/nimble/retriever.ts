@@ -1,4 +1,5 @@
 import type { NormalizedEvidence } from "../../verification/evidence";
+import { buildEventIdentity } from "../../verification/identity";
 import type { OfficialSource } from "../../verification/official-sources";
 import type { EvidenceRetriever, RetrievalResult } from "../../worker/ports";
 import { createNimbleSearchClient, MAX_RESULTS, type NimbleSearchClient } from "./client";
@@ -35,6 +36,7 @@ export function createNimbleRetriever(options: {
     configured: true,
     async search({ event, context, maxSearches, signal }): Promise<RetrievalResult> {
       const queries = buildQueries(event, context, { maxSearches, maxResults: MAX_RESULTS });
+      const identity = buildEventIdentity(event, context);
       const evidence = new Map<string, NormalizedEvidence>();
       const failures: Array<{ kind: "transient" | "permanent"; code: string; retryAfterSeconds: number | null }> = [];
       let performed = 0;
@@ -60,7 +62,7 @@ export function createNimbleRetriever(options: {
         succeeded += 1;
         results += outcome.results.length;
         for (const item of outcome.results) {
-          const normalized = normalizeResult(item, { category: event.category, context, query: spec.query, requestId: outcome.requestId, now: options.now(), registry: options.registry });
+          const normalized = normalizeResult(item, { category: event.category, context, query: spec.query, requestId: outcome.requestId, now: options.now(), registry: options.registry, identity });
           if (!normalized.ok || evidence.has(normalized.evidence.canonicalUrl!)) continue;
           evidence.set(normalized.evidence.canonicalUrl!, normalized.evidence);
           if (normalized.usable) usable += 1;

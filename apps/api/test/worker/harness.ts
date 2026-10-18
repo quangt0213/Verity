@@ -137,7 +137,11 @@ export function deps(ctx: TestContext, clock: FakeClock, over: Partial<WorkerDep
 
 let place = 0;
 /** File a community report at a fresh location (so tests never dedupe into each other's events). */
-export async function newEvent(ctx: TestContext, token: string, over: { title?: string; category?: string; label?: string } = {}): Promise<string> {
+export async function newEvent(
+  ctx: TestContext,
+  token: string,
+  over: { title?: string; category?: string; label?: string; description?: string; extra?: Record<string, unknown> } = {},
+): Promise<string> {
   place += 1;
   const res = await ctx.request({
     method: "POST",
@@ -147,8 +151,9 @@ export async function newEvent(ctx: TestContext, token: string, over: { title?: 
     payload: {
       category: over.category ?? "road_closure",
       title: over.title ?? `Road blocked near test site ${place}`,
-      description: "Two lanes closed, police directing traffic.",
+      description: over.description ?? "Two lanes closed, police directing traffic.",
       location: { coordinates: { latitude: 30 + place * 0.05, longitude: -100 - place * 0.05 }, label: over.label ?? `Test St & ${place}th Ave` },
+      ...over.extra,
     },
   });
   if (res.statusCode !== 201) throw new Error(`report failed: ${res.statusCode} ${res.body}`);

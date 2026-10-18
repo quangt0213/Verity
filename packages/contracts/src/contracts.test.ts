@@ -4,12 +4,15 @@ import {
   checkPublicHttpUrl,
   communityResponseInputSchema,
   eventSummarySchema,
+  foldDiacritics,
   isSafeHttpUrl,
+  jaccard,
   LIMITS,
   listEventsQuerySchema,
   normalizeMultiline,
   normalizeSingleLine,
   reportEventInputSchema,
+  textTokens,
 } from "./index";
 
 const validReport = {
@@ -85,6 +88,32 @@ describe("reportEventInputSchema", () => {
       title: `Crash${String.fromCharCode(0x202e)}on${String.fromCharCode(0x07)} Main   St`,
     });
     expect(parsed.title).toBe("Crashon Main St");
+  });
+
+  describe("reported schedule (planned events only)", () => {
+    const hours = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
+    const festival = { ...validReport, category: "festival" as const, title: "Día San José 2026" };
+    const issues = (input: unknown) => {
+      const r = reportEventInputSchema.safeParse(input);
+      return r.success ? {} : Object.fromEntries(r.error.issues.map((i) => [i.path.join("."), i.message]));
+    };
+
+    it("accepts a start, or a start and end, for planned categories", () => {
+      expect(reportEventInputSchema.safeParse({ ...festival, scheduled_start_at: hours(24) }).success).toBe(true);
+      expect(reportEventInputSchema.safeParse({ ...festival, scheduled_start_at: hours(-2), scheduled_end_at: hours(6) }).success).toBe(true);
+      expect(reportEventInputSchema.safeParse(festival).success).toBe(true);
+    });
+
+    it("rejects schedules on disruptions, ends without starts, reversed or out-of-range times", () => {
+      expect(issues({ ...validReport, scheduled_start_at: hours(1) })).toEqual({ scheduled_start_at: "Only for planned events" });
+      expect(issues({ ...validReport, scheduled_end_at: hours(1) })).toEqual({ scheduled_end_at: "Only for planned events" });
+      expect(issues({ ...festival, scheduled_end_at: hours(1) })).toEqual({ scheduled_start_at: "Add a start time first" });
+      expect(issues({ ...festival, scheduled_start_at: hours(5), scheduled_end_at: hours(1) })).toEqual({ scheduled_end_at: "Must be after the start" });
+      expect(issues({ ...festival, scheduled_start_at: hours(-24 * (LIMITS.scheduleMaxPastDays + 1)) })).toHaveProperty("scheduled_start_at");
+      expect(issues({ ...festival, scheduled_start_at: hours(24 * (LIMITS.scheduleMaxAheadDays + 1)) })).toHaveProperty("scheduled_start_at");
+      expect(issues({ ...festival, scheduled_start_at: hours(1), scheduled_end_at: hours(24 * (LIMITS.scheduleMaxDurationDays + 2)) })).toHaveProperty("scheduled_end_at");
+      expect(issues({ ...festival, scheduled_start_at: "2026-03-19T10:00" })).toHaveProperty("scheduled_start_at"); // an offset is required
+    });
   });
 });
 
@@ -204,5 +233,11 @@ describe("text normalization", () => {
 
   it("keeps paragraph breaks but caps blank runs", () => {
     expect(normalizeMultiline("one\r\n\r\n\r\n\r\ntwo  three")).toBe("one\n\ntwo three");
+  });
+
+  it("folds accents so accented and plain spellings compare equal", () => {
+    expect(foldDiacritics("Día San José, Plaza de César Chávez")).toBe("Dia San Jose, Plaza de Cesar Chavez");
+    expect([...textTokens("Día de San José en la Plaza de César Chávez")]).toEqual(["dia", "san", "jose", "plaza", "cesar", "chavez"]);
+    expect(jaccard(textTokens("Festival San José"), textTokens("festival san jose"))).toBe(1);
   });
 });

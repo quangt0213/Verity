@@ -11,12 +11,14 @@ import { DEFAULT_POLICY, type VerificationPolicy } from "./policy";
  *
  * Eligible: external records returned by a provider in this run (Search
  * results, Agent citations), never community reports or user-submitted
- * links; not already read; not about another place; plausibly about this
- * event; and with a gap reading the page can fill (no exact time, no usable
- * sentence, or an unclear location).
+ * links; not already read; not about another place, date or edition
+ * (identity.ts); plausibly about this event (for a named event, a result that
+ * doesn't name it needs a located mention, an identified source or an Agent
+ * citation); and with a gap reading the page can fill (no exact time, no
+ * usable sentence, or an unclear location).
  *
  * Order: identified sources (OFFICIAL/FIRST_PARTY, primary first), then
- * relevance (location named, stance taken), then a missing time (page
+ * relevance (location named, stance taken, event named), then a missing time (page
  * metadata often has an exact one), then the provider's own order.
  * Diversity: at most ONE page per lineage (obvious duplicates such as
  * syndicated copies or the same URL are never read twice), and a publisher
@@ -56,15 +58,19 @@ export function selectExtractCandidates(input: {
     .filter(({ e, needs, identified }) => {
       if (e.sourceType === "community_report" || !e.canonicalUrl) return false;
       if (!e.retrievalSteps.includes("search") && !e.retrievalSteps.includes("agent")) return false;
-      if (isEnriched(e) || e.locationMatch === "mismatch") return false;
+      if (isEnriched(e) || e.locationMatch === "mismatch" || e.identity === "mismatch") return false;
+      const located = e.locationMatch === "exact" || e.locationMatch === "near";
+      const agentCited = e.retrievalSteps.includes("agent");
+      // A named event the result doesn't name (shared category words only): reading the page is unlikely to help.
+      if (e.identity === "uncertain" && !located && !identified && !agentCited) return false;
       // An Agent-cited page was chosen for THIS investigation, so it is plausibly relevant even without text yet.
-      const relevant = e.excerpt !== null || e.locationMatch === "exact" || e.locationMatch === "near" || identified || e.retrievalSteps.includes("agent");
+      const relevant = e.excerpt !== null || located || identified || agentCited;
       return relevant && (needs.time || needs.content || needs.location);
     });
 
   const rank = (c: (typeof eligible)[number]) => [
     c.identified ? (c.e.isPrimary ? 0 : 1) : 2,
-    -((c.e.locationMatch === "exact" ? 2 : c.e.locationMatch === "near" ? 1 : 0) + (c.e.stance !== "context" ? 1 : 0)),
+    -((c.e.locationMatch === "exact" ? 2 : c.e.locationMatch === "near" ? 1 : 0) + (c.e.stance !== "context" ? 1 : 0) + (c.e.identity === "match" ? 1 : 0)),
     c.needs.time ? 0 : 1,
     c.index,
   ];

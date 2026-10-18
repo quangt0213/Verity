@@ -140,4 +140,24 @@ describe("mock writes", () => {
       expect(Object.keys(result.error.fields ?? {})).toEqual(expect.arrayContaining(["title", "source_url"]));
     }
   });
+
+  it("accepts a reported schedule for planned events only, and never treats it as the event's schedule", async () => {
+    const api = createMockApi({ writes: "simulate", latencyMs: [0, 0] });
+    const soon = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
+    const festival = {
+      category: "festival" as const,
+      title: "Lantern night market",
+      location: { coordinates: { latitude: 37.3328, longitude: -121.8901 }, label: "Plaza de César Chávez, San Jose, CA" },
+      scheduled_start_at: soon(24),
+      scheduled_end_at: soon(30),
+    };
+    const ok = await api.reportEvent(festival);
+    expect(ok).toMatchObject({ ok: true, data: { outcome: "created" } });
+    if (ok.ok) expect(await api.getEvent(ok.data.event_id)).toMatchObject({ status: "UNVERIFIED", scheduled_start_at: null, scheduled_end_at: null });
+
+    const disruption = await api.reportEvent({ ...report, scheduled_start_at: soon(1) });
+    expect(disruption).toMatchObject({ ok: false, error: { code: "validation_failed", fields: { scheduled_start_at: "Only for planned events" } } });
+    const reversed = await api.reportEvent({ ...festival, scheduled_end_at: soon(1) });
+    expect(reversed).toMatchObject({ ok: false, error: { fields: { scheduled_end_at: "Must be after the start" } } });
+  });
 });

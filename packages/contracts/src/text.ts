@@ -56,10 +56,19 @@ export function multilineText(max: number) {
     .pipe(z.string().max(max, { message: `Must be at most ${max} characters` }));
 }
 
-/** Lowercase word tokens longer than two characters, for rough text similarity. */
+/**
+ * Remove diacritics so "César Chávez" and "Cesar Chavez" compare equal
+ * (NFD, then drop combining marks). Letters without an ASCII decomposition
+ * (ß, ø, ł) are kept as they are.
+ */
+export function foldDiacritics(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}+/gu, "").normalize("NFC");
+}
+
+/** Lowercase word tokens longer than two characters, for rough text similarity. Accents are folded first. */
 export function textTokens(text: string): Set<string> {
   return new Set(
-    text
+    foldDiacritics(text)
       .toLowerCase()
       .split(/[^a-z0-9]+/)
       .filter((t) => t.length > 2),

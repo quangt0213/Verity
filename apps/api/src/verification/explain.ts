@@ -88,6 +88,9 @@ export function explainDecision(d: Omit<Decision, "explanation">, current: Event
   if (f.dateOnly > 0) {
     parts.push(`${plural(f.dateOnly, "more source gives", "more sources give")} only a date, not a time, which is too imprecise to count for this kind of event yet.`);
   }
+  if (f.announcedOnly > 0) {
+    parts.push(`${plural(f.announcedOnly, "source announces", "sources announce")} this event, which shows it is planned, not that it is happening now.`);
+  }
   if (d.guard === "no_downgrade") parts.push(`Status stays ${STATUS_LABEL[current]} until the evidence changes or ages out.`);
   if (d.guard === "reopened") parts.push("New supporting evidence reopened this event for verification.");
   if (f.community.disputes > 0) parts.push(`${plural(f.community.disputes, "person disputes", "people dispute")} this; disputes prompt a re-check but don't change the status on their own.`);
