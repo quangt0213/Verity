@@ -9,7 +9,7 @@ Git, code and tests win over this file. If they disagree, fix this file.
 
 | | |
 | --- | --- |
-| Last synchronized | 2026-10-18 (round 3: failure handling; release branches published as draft PRs) |
+| Last synchronized | 2026-10-18 (round 4: gate 1 follow-ups; local only, not pushed) |
 | Sprint baseline | `origin/main` = `cc44449` (merge of PR #6). All four worktrees start here. |
 | Integration branch | `team/integration` (worktree `<worktrees>/integration`) |
 | Worktrees | `<worktrees>` is a local folder outside the repository and outside OneDrive; the exact path is in the local, untracked `docs/HANDOFF.md`. |
@@ -23,10 +23,10 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 
 | Workstream | Agent | Stage | Branch | Tests | Blocker | Next action |
 | --- | --- | --- | --- | --- | --- | --- |
-| Verification intelligence | `verifier` | REVIEW (round 3 merged) | `team/verification-r3` @ `55377f0` | Round 3: migrator failure classes (exit 2 refused, 3 not attempted, 4 rolled back, 5 unknown), session name `verity-migrate`. check: API 733 + 19 skipped; real PostgreSQL 19/19 | None | Review |
-| Map / build and release path | `map-perf` | REVIEW (round 3 merged) | `team/map-build-r3` @ `24df1cd` | Round 3: docs only (runbook failure handling, backup restore validation, approval phrases, PR B reconciliation) | Maypop and Railway settings need operator confirmation | Review |
-| Layout and report compatibility | `layout` | REVIEW (round 3 merged) | `team/layout-r3` @ `6499d03` | Round 3: unknown submit outcomes with an arrival check; FeedPanel test 4.8 s → 2.2 s. check: web 142; e2e 57 + 21 skipped; service 2 | None | Review |
-| Integration and release readiness | lead | REVIEW | `team/integration`; `release/backend` (PR A) and `release/frontend` (PR B) as draft PRs | See "Round 3 test results" | User approval of each release gate | User: approve gate 1 (read-only preflight) only |
+| Verification intelligence | `verifier` | REVIEW (round 4 merged) | `team/verification-r4` @ `98fd426` | Round 4: production over-claim defect in `claimJobs` fixed (regression test fails before, passes after); two-worker test isolated. Parallel real-PostgreSQL suite before 8/20 failing, after 0/20 | None | Review |
+| Map / build and release path | `map-perf` | REVIEW (round 4 merged) | `team/map-build-r4` @ `deb0288` | Round 4: docs only. v2 source identified (Maypop editor workspace, iteration 3); rollback limits | Maypop publish trigger and published-version restore unverified | Review |
+| Layout and report compatibility | `layout` | REVIEW (round 4 merged) | `team/layout-r4` @ `d419632` | Round 4: docs only. Published v2 × candidate backend run locally (v2 unmodified, production API intercepted) | None | Review |
+| Integration and release readiness | lead | REVIEW | `team/integration` (local, ahead of PRs #8/#9) | See "Round 4 test results" | Migration host (IPv6), production backup, Maypop restore path | User: approve the production backup only |
 
 ### Integration log
 
@@ -47,7 +47,12 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 | `cd3c6a6`, `6a2f5fe` | Round 3: merge `team/verification-r3` (failure classes, then `application_name`) |
 | `655227f` | Round 3: merge `team/map-build-r3` (runbook) |
 | `e748524` | Round 3: merge `team/layout-r3` (unknown outcomes, arrival check, FeedPanel test speed) |
-| next commit | Round 3 lead: PR B base change in the runbook, this file |
+| `d63c448` | Round 3 lead: PR B base change in the runbook, this file |
+| `8702473` | Round 4 lead: [BACKUP_RESTORE_PLAN.md](BACKUP_RESTORE_PLAN.md) (rehearsed locally), corrected intermittent-test count |
+| `fef2070` | Round 4: merge `team/verification-r4` (claim-limit fix, harness isolation, migration connection assessment) |
+| `d24c04a` | Round 4: merge `team/map-build-r4` (v2 provenance, rollback evidence) |
+| `15a2121` | Round 4: merge `team/layout-r4` (v2 × candidate backend) |
+| next commit | Round 4 lead: runbook facts from the dashboards, migration connection, rollback limits, this file |
 
 ## User decisions (2026-10-17)
 
@@ -56,6 +61,104 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 3. **Reporter links:** stay never fetched this sprint.
 4. **V2 (Agent page reads):** deferred. **Every paid Nimble budget stays at zero.**
 5. **Map and layout trade-offs:** provisionally accepted (POI density, preconnect, +150 ms cold `/map`, Report button hidden while a preview is open, sidebar `clamp(360px, 30vw, 440px)`, pull-to-refresh off when top-level on mobile). Padded query bbox: not built.
+
+## Gate 1 inspection (2026-10-18): completed with unresolved findings
+
+Gate 1 was an inspection round. It did **not** fully pass. Read-only results,
+08:12–08:45 UTC, with follow-ups in round 4:
+
+| Item | Result |
+| --- | --- |
+| GitHub: PRs #7/#8/#9 drafts at `c0264c3`/`19db3e1`/`c11bfe5`, `main` = `cc44449`, no deployments on release heads | PASS |
+| Railway: both services on `cc44449`, worker budgets explicitly 0, `MIGRATE_ON_START=false`, start commands, branch `main`, no watch paths, PR environments off | PASS |
+| Database: 6 history rows match the baseline hashes, no `report_schedules`, same owner on 15 tables, RLS 15/15, 0 policies, client roles have no privileges | PASS |
+| Paid spend: 1 search ever (the first live test, 2026-10-17 03:53 UTC); 0 extracts, 0 Agent runs | PASS |
+| Published frontend (v2): API mode, map, detail and report form work read-only; no writes | PASS (known desktop blank-space bug, fixed in PR B) |
+| Migration connection | FAIL on the session pooler. Round 4: PASS on the direct host from an IPv6 workstation (below) |
+| Fresh backup with restore proof | FAIL: none exists. Round 4: plan written and rehearsed locally; the production dump needs its own approval |
+| Maypop publication trigger, published-version restore, where `VITE_*` values are stored | UNVERIFIED (round 4 narrowed it; below) |
+| Phone width in production; console inside the Maypop page | UNVERIFIED (local tests cover them) |
+
+## Round 4: gate 1 follow-ups (2026-10-18, local only)
+
+Authorized: local investigation, development, tests and documentation, plus
+read-only follow-ups. Nothing was migrated, dumped, merged, deployed,
+published or pushed.
+
+**Intermittent two-worker test: cause established (`verifier`).**
+- **Production defect.** `claimJobs` (`apps/api/src/worker/jobs.ts`,
+  unchanged since `cc44449`, so deployed today) used `UPDATE … WHERE id IN
+  (SELECT … LIMIT n FOR UPDATE SKIP LOCKED)`. PostgreSQL planned it as a
+  nested-loop semi-join that re-scans the locking subquery, so **one call
+  claimed every ready job whatever the limit**: 30 of 30 on PostgreSQL 18.6,
+  6 of 6 on PGlite. `VERIFICATION_WORKER_CONCURRENCY` was not enforced, and
+  worker processes didn't share load.
+- **What it never allowed:** a paid call beyond a daily budget.
+  `reserveBudget` reserves atomically before each call. With every budget at
+  0 in production, over-claimed jobs simply defer.
+- **Fix:** a `MATERIALIZED` CTE that locks the ready rows exactly once.
+  `test/worker/claim-limit.test.ts` fails before the fix and passes after.
+- **Harness defects** that passed only because of the over-claim: the
+  two-worker test shared a database with earlier tests' leftover ready jobs
+  (it now has its own database and asserts each claim is ≤ 2, only its own
+  jobs, nothing left running); the lifecycle test and the `claimFor` helper
+  were also corrected.
+- **Ruled out with evidence:** cross-file database sharing, CPU contention
+  (24 busy loops), database contention (pgbench -c 24), database errors.
+- **Counts:**
+  - parallel real-PostgreSQL suite before the fix: 8 of 20 failing (verifier,
+    round 4);
+  - earlier observation: 4 of 16 (verifier, rounds 3–4);
+  - after the fix: 0 of 20 parallel, 0 of 20 under CPU load, 0 of 20 under
+    database load, 0 of 20 isolated;
+  - lead runs after integration: see the results table.
+
+**Migration connection (`verifier`, harmless probe 13:07 UTC):**
+- The session pooler drops startup parameters, so the migrator refuses
+  there. A session `SET` holds on one pinned backend, but relying on it would
+  need a code change.
+- **The direct host** (IPv6-only DNS) was reachable from this workstation,
+  with TLS verified and authentication working, and it honored all three
+  startup parameters.
+- **Recommendation:** migrate over the direct host from an IPv6-capable
+  machine, with no code change (runbook gate 2, item 6).
+- **Limits:** it was not checked from any other machine, and the pooler's
+  backend pinning under a real migration transaction is unproven.
+
+**Published frontend v2 (`map-perf`, lead browser observation):**
+- **Source:** v2's source is Maypop's editor workspace, iteration 3 ("The
+  approved synchronization", Oct 12). Of `cc44449`'s 73 `apps/web/src` files,
+  71 are byte-identical; `src/config/env.ts` (plus its test) adds an "API mode
+  requires a Verity service URL" guard.
+- **Artifact:** 5 of 8 downloaded v2 files are byte-identical to a local
+  `cc44449` build. `index.html` has Maypop's injected scripts, and the CSS has
+  5 extra utilities.
+- **Not established:** the published-version list or restore, what triggers
+  sync or publish, and where the `VITE_*` values are stored.
+- **The editor draft is preserved:** no Discard, Revert, Done, sync or
+  Unlink.
+
+**v2 × candidate backend (`layout`, local):** the unmodified v2 files were
+served locally against PR A's API, with production-API requests intercepted.
+Nothing reached production.
+- **Works:** map, list, detail, a report without a schedule, field errors,
+  and 500/502/network failures (input kept, no automatic resubmit).
+- **New risk while v2 stays live after PR A:** after a lost response, v2 only
+  says "temporarily unavailable", so a manual resubmit stores a second report
+  from the same user. It attaches to the same event and doesn't raise the
+  independent-source count. PR B fixes the messaging.
+- **Not checked:** signals/follow writes, the worker's data, and v2 inside
+  the Maypop page.
+
+### Round 4 test results (lead runs on `team/integration`)
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | Pass. 934 tests: 58 contracts, 734 API (19 real-PostgreSQL skipped, run below), 142 web; typecheck, lint, builds, bundle secret scan |
+| `npm run test:concurrency -w @verity/api`, files in parallel (throwaway local PostgreSQL 18, deleted afterwards) | 12 of 12 runs passed (19/19 tests each) |
+| `test/worker/claim-limit.test.ts` with `cc44449`'s `jobs.ts` swapped in, then restored | Fails as expected ("expected length 2 but got 6"); passes with the fix. Confirms the deployed code over-claims |
+| Backup plan rehearsal (local, no production data) | Dump, inventory, restore (after the `public` schema fix) and all checks passed; 0006 applied to the restored copy |
+| Not run | Playwright and the service e2e suite (no `apps/web` change in round 4; last run in round 3: 57 passed / 21 skipped, service 2). Anything in production |
 
 ## Round 3: honest failure handling (2026-10-18)
 
