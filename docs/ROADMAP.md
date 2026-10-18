@@ -14,7 +14,21 @@ section says so. Current sprint status: [WORKSTREAM_STATUS.md](WORKSTREAM_STATUS
 
 ## Deferred verification work
 
-- **Shared Extract/Agent ceiling.** When pre-Agent extraction uses every Extract
+User decisions (2026-10-17): keep "officially scheduled" separate from
+"actually happening" and don't weaken verification standards; keep reporter
+links never fetched; defer V2; keep every paid Nimble budget at zero.
+
+- **Official schedule evidence, shown separately.** Today nothing in
+  production sets an event's established schedule (`events.scheduled_*`), so
+  announcements can't count as support (scheduled ≠ occurring). Future work:
+  let an identified source (OFFICIAL or FIRST_PARTY, from the reviewed
+  registry) establish the schedule through an audited step, and show it on
+  the event as its own "Officially scheduled" evidence, separate from the
+  status and from evidence that the event is happening. A reporter's claimed
+  schedule never establishes it.
+- **Reporter links** stay never fetched (A5). The hint-only option in
+  `docs/handoffs/verification.md` is recorded but not planned.
+- **Shared Extract/Agent ceiling (V2, deferred).** When pre-Agent extraction uses every Extract
   slot, the Agent's URL-only citations can't be read in that attempt, so a paid
   Agent run adds nothing. The behavior change is deferred. See
   `docs/handoffs/verification.md` for the recommendation.

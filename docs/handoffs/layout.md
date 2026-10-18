@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Owner | `layout` |
-| Branch | `team/layout-fixes` (worktree `C:\Users\quang\verity-worktrees\layout-fixes`), fast-forwarded to `team/integration` `642836a`, then follow-up commits |
+| Branch | `team/layout-fixes` (worktree `<worktrees>/layout-fixes`), fast-forwarded to `team/integration` `642836a`, then follow-up commits |
 | Stage | REVIEW: L0–L4 and the follow-up (feed render cost, schedule fieldset) done |
 | Last updated | 2026-10-17 |
 
@@ -203,9 +203,9 @@ Pan long tasks include MapLibre work, not only React.
 Requests 1 and 2 were applied by the lead (`team/integration` `642836a`).
 The follow-up needs no MapShell change.
 
-1. `C:\Users\quang\verity-worktrees\requests\layout-mapshell-1.patch`
+1. `<worktrees>/requests/layout-mapshell-1.patch`
    (superseded by 2; kept for reference): aside `relative overscroll-contain`.
-2. `C:\Users\quang\verity-worktrees\requests\layout-mapshell-2.patch`: apply
+2. `<worktrees>/requests/layout-mapshell-2.patch`: apply
    on top of this branch (it relies on the committed `index.css` hooks). It
    changes `MapShell.tsx` and adds `apps/web/e2e/layout-overlays.spec.ts`.
    `git apply --check` passes against `03b027f`.
@@ -255,7 +255,7 @@ The follow-up needs no MapShell change.
 
 ## Resumption steps
 
-1. `cd C:/Users/quang/verity-worktrees/layout-fixes && git log --oneline origin/main..`
+1. `cd <worktrees>/layout-fixes && git log --oneline origin/main..`
 2. Feed perf: take the e2e lock, then in `apps/web` run
    `PW_CHANNEL=chrome PERF_LABEL=x PERF_CPU_THROTTLE=4 npx playwright test -c e2e/perf/playwright.perf.config.ts feed.perf.ts`;
    results land in `node_modules/.cache/verity-perf/x-feed.json`.

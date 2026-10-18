@@ -1,6 +1,6 @@
 # Verification workstream handoff
 
-Owner: `verifier`. Branch: `team/verification` (worktree `C:\Users\quang\verity-worktrees\verification`), based on `origin/main` = `cc44449`. Git, code and tests win over this file.
+Owner: `verifier`. Branch: `team/verification` (worktree `<worktrees>/verification`), based on `origin/main` = `cc44449`. Git, code and tests win over this file.
 
 ## Status
 
@@ -107,6 +107,6 @@ Option 1 is the only one that makes the paid run useful without weakening the de
 
 ## Exact resumption steps
 
-1. `cd C:/Users/quang/verity-worktrees/verification && git log --oneline origin/main..HEAD`.
+1. `cd <worktrees>/verification && git log --oneline origin/main..HEAD`.
 2. `npm run check` at the worktree root. For UI changes, take the e2e lock and run `PW_CHANNEL=chrome npm run test:e2e` in `apps/web`.
 3. Open items: A5 option (b/c) and V2 option 1 are both small and behind flags; implement only after the decisions above.

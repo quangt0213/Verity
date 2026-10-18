@@ -166,6 +166,67 @@ test("the document doesn't scroll on the mobile map either", async ({ page, isMo
   expect(m.appOverflowX).toBeLessThanOrEqual(1);
 });
 
+test.describe("mobile map inside a Maypop-like cross-site iframe", () => {
+  test.skip(({ isMobile }) => !isMobile, "mobile layout");
+
+  /** Only the sheet's own list may scroll; the app document and the host page never do. */
+  async function expectFramePinned(page: Page, frame: Frame, step: string) {
+    const m = await measure(frame);
+    expect(m.docScrollHeight, `${step}: app document must not be scrollable`).toBeLessThanOrEqual(m.docClientHeight);
+    expect(m.docScrollTop, `${step}: app document scrollTop`).toBe(0);
+    expect(m.appOverflowY, `${step}: content escaping its scroller (vertical)`).toBeLessThanOrEqual(0);
+    expect(m.appOverflowX, `${step}: content escaping its scroller (horizontal)`).toBeLessThanOrEqual(1);
+    expect(m.map, `${step}: map container`).not.toBeNull();
+    // On mobile the map runs under the sheet to the bottom of the frame.
+    expect(m.map!.bottom, `${step}: map bottom`).toBe(m.innerHeight);
+    expect(await page.evaluate(() => document.scrollingElement!.scrollTop), `${step}: host page scrollTop`).toBe(0);
+  }
+
+  for (const [width, height] of [
+    [375, 667],
+    [390, 844],
+  ] as const) {
+    test(`sheet and detail scrolling stay inside the app at ${width}x${height}`, async ({ page, baseURL }) => {
+      await page.setViewportSize({ width, height });
+      const host = await startHost(`${baseURL}/#/map`);
+      try {
+        await page.goto(host.url);
+        const frame = page.frame({ url: /#\/map/ });
+        expect(frame).not.toBeNull();
+        const sheet = frame!.getByRole("region", { name: "Events in this area" });
+        await expect(sheet.getByRole("link").first()).toBeAttached();
+        await expectFramePinned(page, frame!, "loaded");
+
+        // Full sheet, then scroll its list past the end: this must not chain into the frame or the host.
+        // DOM clicks: Playwright's own click scrolls the HOST page to bring the
+        // still-animating handle into view, which would hide (or fake) chaining.
+        // The handle's pointer and keyboard paths are covered by the sheet tests.
+        const handle = sheet.getByRole("button", { name: "Expand event list" });
+        await handle.evaluate((el) => (el as HTMLElement).click());
+        await expect(sheet).toHaveAttribute("data-snap", "half");
+        await handle.evaluate((el) => (el as HTMLElement).click());
+        await expect(sheet).toHaveAttribute("data-snap", "full");
+        const list = sheet.locator(":scope > div.overflow-y-auto");
+        // Scroll once the sheet has finished growing and the cards are in.
+        await expect
+          .poll(() => list.evaluate((el) => (el.scrollTo(0, el.scrollHeight), el.scrollTop)), { message: "the sheet's list scrolls" })
+          .toBeGreaterThan(0);
+        await wheelOver(page, frame!, "[role=region][aria-label='Events in this area'] > div.overflow-y-auto", 600);
+        await expectFramePinned(page, frame!, "sheet list scrolled past its end");
+
+        // Open an event from the sheet and scroll its detail.
+        await sheet.getByRole("link").first().evaluate((el) => (el as HTMLElement).click());
+        const detail = frame!.getByRole("region", { name: "Event details" });
+        await expect(detail.getByRole("heading", { level: 1 })).toBeVisible();
+        await detail.locator(":scope > div").last().evaluate((el) => el.scrollTo(0, el.scrollHeight));
+        await expectFramePinned(page, frame!, "detail scrolled");
+      } finally {
+        await host.close();
+      }
+    });
+  }
+});
+
 test.describe("mobile bottom sheet", () => {
   test.skip(({ isMobile }) => !isMobile, "mobile layout");
 
@@ -278,11 +339,11 @@ test("the welcome page scrolls inside its own region on a short screen", async (
 
 /**
  * A stand-in for the Maypop host on another site (localhost vs 127.0.0.1), on a
- * free port. The host page itself is scrollable (content below the iframe), so
+ * free port, laid out at device width like a mobile web page. The host page itself is scrollable (content below the iframe), so
  * scroll chaining out of the iframe would show up as host scrollTop.
  */
 async function startHost(appUrl: string): Promise<{ url: string; close: () => Promise<void> }> {
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Host</title>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Host</title>
 <style>body{margin:0}header{height:56px}iframe{border:0;display:block;width:100%;height:calc(100vh - 56px);background:#fff}footer{height:400px}</style></head>
 <body><header>Host</header><iframe title="Verity" src="${appUrl}"
   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-popups-to-escape-sandbox allow-downloads"></iframe><footer></footer></body></html>`;

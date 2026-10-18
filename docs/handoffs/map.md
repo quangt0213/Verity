@@ -208,7 +208,7 @@ subject to CSP. The bundle secret scan passes.
 ## Requests to lead
 
 1. **MapShell context memo**
-   (`C:\Users\quang\verity-worktrees\requests\map-perf-mapshell-1-integration.patch`).
+   (`<worktrees>/requests/map-perf-mapshell-1-integration.patch`).
    - Written against the integrated MapShell on `team/integration`; it applies
      cleanly with `patch -p1`. The older `map-perf-mapshell-1.patch` targets
      `cc44449`.
@@ -282,7 +282,7 @@ Plan for a 3D mode:
 
 ## Exact resumption steps
 
-1. `cd C:/Users/quang/verity-worktrees/map-performance && git log --oneline -5`.
+1. `cd <worktrees>/map-performance && git log --oneline -5`.
 2. To re-measure (port 4281), from `apps/web`, run
    `PW_CHANNEL=chrome PERF_LABEL=x npx playwright test -c e2e/perf/playwright.perf.config.ts e2e/perf/map-baseline.perf.ts`.
    Results go to `apps/web/node_modules/.cache/verity-perf/`. For A/B runs use

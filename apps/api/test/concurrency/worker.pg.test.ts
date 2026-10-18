@@ -61,13 +61,17 @@ describe.skipIf(!target)("worker on real PostgreSQL", () => {
     return lease;
   }
 
-  it("applied migrations 0000-0005 to the throwaway database", async () => {
+  it("applied migrations 0000-0006 to the throwaway database", async () => {
     const [m] = (await t.a.db.execute(sql`select count(*)::int as n from drizzle.__drizzle_migrations`)) as unknown as Array<{ n: number }>;
-    expect(m!.n).toBe(6);
+    expect(m!.n).toBe(7);
     const [cols] = (await t.a.db.execute(
       sql`select count(*)::int as n from information_schema.columns where table_name = 'verification_runs' and column_name in ('extract_count', 'agent_id', 'agent_cleaned_up_at')`,
     )) as unknown as Array<{ n: number }>;
     expect(cols!.n).toBe(3);
+    const [schedules] = (await t.a.db.execute(
+      sql`select relrowsecurity as rls from pg_class where oid = to_regclass('public.report_schedules')`,
+    )) as unknown as Array<{ rls: boolean }>;
+    expect(schedules?.rls).toBe(true);
   });
 
   it("serializes concurrent reports at one place (advisory lock): one event, every report attached", async () => {
