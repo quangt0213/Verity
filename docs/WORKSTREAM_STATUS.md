@@ -9,7 +9,7 @@ Git, code and tests win over this file. If they disagree, fix this file.
 
 | | |
 | --- | --- |
-| Last synchronized | 2026-10-18 (round 4: gate 1 follow-ups; local only, not pushed) |
+| Last synchronized | 2026-10-19 (round 5: production backup taken and restore-validated locally; release branches local only, not pushed) |
 | Sprint baseline | `origin/main` = `cc44449` (merge of PR #6). All four worktrees start here. |
 | Integration branch | `team/integration` (worktree `<worktrees>/integration`) |
 | Worktrees | `<worktrees>` is a local folder outside the repository and outside OneDrive; the exact path is in the local, untracked `docs/HANDOFF.md`. |
@@ -23,10 +23,10 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 
 | Workstream | Agent | Stage | Branch | Tests | Blocker | Next action |
 | --- | --- | --- | --- | --- | --- | --- |
-| Verification intelligence | `verifier` | REVIEW (round 4 merged) | `team/verification-r4` @ `98fd426` | Round 4: production over-claim defect in `claimJobs` fixed (regression test fails before, passes after); two-worker test isolated. Parallel real-PostgreSQL suite before 8/20 failing, after 0/20 | None | Review |
-| Map / build and release path | `map-perf` | REVIEW (round 4 merged) | `team/map-build-r4` @ `deb0288` | Round 4: docs only. v2 source identified (Maypop editor workspace, iteration 3); rollback limits | Maypop publish trigger and published-version restore unverified | Review |
-| Layout and report compatibility | `layout` | REVIEW (round 4 merged) | `team/layout-r4` @ `d419632` | Round 4: docs only. Published v2 × candidate backend run locally (v2 unmodified, production API intercepted) | None | Review |
-| Integration and release readiness | lead | REVIEW | `team/integration` (local, ahead of PRs #8/#9) | See "Round 4 test results" | Migration host (IPv6), production backup, Maypop restore path | User: approve the production backup only |
+| Verification intelligence | `verifier` | REVIEW (round 5 merged) | `team/verification-r5` @ `41a1c5c` | Round 5: backup plan on PostgreSQL 17 rehearsed twice. Restore validation of the production archive PASS in both modes | None | Review |
+| Map / build and release path | `map-perf` | REVIEW (round 5 merged) | `team/map-build-r5` @ `ee4b9d2` | Round 5: docs only. Protected destination; archive hash match; TOC 150/143 explained; frontend recovery wording | Maypop publish trigger and published-version restore unverified | Review |
+| Layout and report compatibility | `layout` | REVIEW (round 5 merged) | `team/layout-r5` @ `005ecf7` | Round 5: docs only. Mobile-iframe, writes and worker data covered locally; duplicate resubmission stated exactly | Phone-only and Maypop-host checks | Review |
+| Integration and release readiness | lead | REVIEW | `team/integration` (local, ahead of PRs #8/#9) | See "Round 5: production backup" | Migration host (IPv6), Maypop restore path, fresh backup in the migration window | User: approve publishing the updated release branches |
 
 ### Integration log
 
@@ -52,7 +52,12 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 | `fef2070` | Round 4: merge `team/verification-r4` (claim-limit fix, harness isolation, migration connection assessment) |
 | `d24c04a` | Round 4: merge `team/map-build-r4` (v2 provenance, rollback evidence) |
 | `15a2121` | Round 4: merge `team/layout-r4` (v2 × candidate backend) |
-| next commit | Round 4 lead: runbook facts from the dashboards, migration connection, rollback limits, this file |
+| `d5c5445` | Round 4 lead: runbook facts from the dashboards, migration connection, rollback limits, this file |
+| `1534ae2` | Round 4: merge `team/verification-r4` follow-up (claim audit and production impact) |
+| `a5dcb15` | Round 5: merge `team/verification-r5` (PostgreSQL 17 backup plan, rehearsals, restore validation record) |
+| `80588dc` | Round 5: merge `team/map-build-r5` (backup destination, evidence handling, frontend recovery wording, TOC explanation) |
+| `54455a7` | Round 5: merge `team/layout-r5` (v2 compatibility coverage, duplicate-resubmission limitation) |
+| next commit | Round 5 lead: backup record, runbook restore-validation and freshness wording, verification handoff escapes and local paths, this file |
 
 ## User decisions (2026-10-17)
 
@@ -61,6 +66,62 @@ Stage values: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, `DONE`.
 3. **Reporter links:** stay never fetched this sprint.
 4. **V2 (Agent page reads):** deferred. **Every paid Nimble budget stays at zero.**
 5. **Map and layout trade-offs:** provisionally accepted (POI density, preconnect, +150 ms cold `/map`, Report button hidden while a preview is open, sidebar `clamp(360px, 30vw, 440px)`, pull-to-refresh off when top-level on mobile). Padded query bbox: not built.
+
+## Round 5: production backup (2026-10-18/19)
+
+Authorized: "Approve production backup: read-only `pg_dump` of the Verity
+schemas, plus local restore validation." Nothing was migrated, restored into
+production, merged, deployed, published or pushed. Details are in
+[BACKUP_RESTORE_PLAN.md](BACKUP_RESTORE_PLAN.md) and the round 5 and 5b
+sections of `docs/handoffs/verification.md` and `docs/handoffs/map.md`.
+
+- **Scope:** Verity application backup (schemas `public` + `drizzle`). Not a
+  complete Supabase project backup.
+- **Provenance:** another session of the user ran
+  `backup.mjs --source production` on 2026-10-19 from 00:19:05Z to 00:19:20Z.
+  - The verifier's two attempts were denied by the Claude Code permission
+    classifier and never ran.
+  - Codex did not run it; it only checked PostgreSQL executable versions.
+  - An earlier shell error seen outside this team remains unexplained. The
+    PATH hypothesis is retired: the explicit PostgreSQL 17 path works, even
+    though PATH resolves to 18.6.
+- **Preflight (facts record):**
+  - server 17.11, verified TLS over IPv6 on the direct host;
+  - history 6/6 matching the runbook, `report_schedules` absent, 15 tables;
+  - no forced RLS, and every row visible to the dump role.
+- **Archive:**
+  - `pg_dump` 17.11, custom format, owners and ACLs kept; exit 0;
+  - 74,588 bytes, SHA-256 `ce188e95…b8c6d`. Map-perf recomputed the hash
+    (match) and wrote the `.sha256` sidecar;
+  - 143 listed TOC entries of 150 in the header. The other 7 are 3 archive
+    settings plus 4 database-level entries used only with `--create`.
+- **Restore validation (03:52Z):** PostgreSQL 17.11 on 127.0.0.1, password
+  auth, no `trust` rule.
+  - The `DROP` guard self-test passed first.
+  - Mode a (plain data) and mode b (owners and ACLs, including the 6 default
+    privilege entries) both exited 0, and every check passed:
+    - same-snapshot counts, 0 mismatches;
+    - 6 history hashes and timestamps;
+    - `report_schedules` absent;
+    - constraints, indexes, 2 functions, 3 enabled triggers, RLS 15/15;
+    - owners and the client-role privilege fingerprint equal production's.
+  - Mode b created `anon`, `authenticated`, `service_role` and
+    `supabase_admin` as NOLOGIN roles, only in the disposable cluster.
+- **Not proven:**
+  - recovery of anything outside `public`/`drizzle`, and database-level
+    settings (restores ran without `--create`);
+  - the guard's other-server case on this run (it passed in rehearsal);
+  - disk encryption of the protected destination (unknown without admin).
+- **Cleanup:** the lead verified the PostgreSQL 17 server was stopped, then
+  deleted the restore data directory and the restore logs. The archive, the
+  sidecar, the evidence files and the dump log are kept, operator-only.
+  - **Retention:** keep them until 0006 is verified in production and the
+    release has run cleanly for an agreed period.
+- **Freshness:** the backup reflects 2026-10-19 00:19Z, and production keeps
+  accepting writes. Gate 2 needs a fresh backup and restore validation taken
+  immediately before the migration (runbook, gate 2 item 1).
+
+**Successful restoration does not authorize gate 2.**
 
 ## Gate 1 inspection (2026-10-18): completed with unresolved findings
 

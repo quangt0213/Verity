@@ -20,6 +20,10 @@ See "Round 2: release path and publication hold" at the end.
 published Maypop v2 frontend, and rollback options. Read-only evidence, docs
 only. See "Round 4: Maypop v2 provenance and rollback" at the end.
 
+**Round 5 (branch `team/map-build-r5`, from `1534ae2`):** the secure local
+backup destination and evidence template for the production `pg_dump` (outside
+Git), plus frontend recovery wording. See "Round 5" at the end.
+
 ## Goal
 
 The user's complaints: new places load slowly after a pan or fly-to; parks,
@@ -688,4 +692,125 @@ Nothing was saved, discarded, reverted, published or unlinked.
   the guard is a separate decision for the owners.
 - Until the gate 6 path is known, treat **"Done →", "Revert", "Discard" and any
   synchronization as publish-adjacent actions that need explicit approval.**
+
+## Round 5: backup destination, evidence, frontend recovery wording (2026-10-18)
+
+Scope: the verifier is the only operator touching production (read-only
+`pg_dump` of `public` and `drizzle`, then a local restore validation). This
+workstream didn't connect to production, didn't use a browser and didn't push
+anything.
+
+### Backup destination (outside Git; nothing in this repository)
+
+All local, checked 2026-10-18 19:41 UTC.
+
+| Check | Result | Status |
+| --- | --- | --- |
+| Folders | The protected destination (a dated folder on the local disk) with `archive\` (the dump), `restore\` (the disposable PostgreSQL 17 cluster's data directory and logs, which hold production rows) and `evidence\` | VERIFIED |
+| Outside Git | No `.git` in the destination or above it | VERIFIED |
+| Outside OneDrive | The only sync root is the user's OneDrive folder (one business account, no tenant libraries). Desktop, Documents and Pictures are redirected into it; Downloads isn't. The destination is under none of them. It's on a local fixed NTFS volume | VERIFIED |
+| Access | Inheritance removed. Only the operator account has `(OI)(CI)(F)`, and it owns the folder. Removed: the inherited Administrators, SYSTEM, Users and Authenticated Users entries. SYSTEM isn't needed (the restore cluster runs as the operator), and leaving it out also keeps the search indexer out. Administrators can still take ownership; that's accepted | VERIFIED (icacls) |
+| Disk encryption | `Get-BitLockerVolume` and `manage-bde` need admin. The unelevated shell property gives an uninterpretable `0`. The OS is Windows 11 Home | **UNKNOWN** |
+| Windows Search | Indexed scope covers `C:\Users\`, the Start Menu and Office content only; the indexer account has no access | VERIFIED |
+| File History | Not configured (no configuration folder; service stopped) | VERIFIED |
+| Handling rule | The archive and the restore cluster contain authentication and personal data. Never put them, or any row contents, in screenshots, chat messages or attachments, commits, PRs, docs, build artifacts, the scratchpad or OneDrive. This was sent to the verifier and written at the top of the evidence README | — |
+
+The evidence template is `evidence\README.txt` (outside Git), facts only:
+archive name and format, size, SHA-256 and sidecar; versions from the
+`pg_restore --list` header; the archive creation time; dump start and end
+(UTC); inventory counts by entry type; the restore result per mode; the checks
+(15 tables, key-table counts, 6 migration rows and hashes, `report_schedules`
+absent); and disposal. After the dump, this workstream computes the size and
+SHA-256 and writes `<archive>.sha256`. It reads the archive only by hashing it
+and running `pg_restore --list`, and never extracts data.
+
+### Frontend recovery wording
+
+This supersedes round 4, section 3, step 3. `docs/RELEASE_RUNBOOK.md` gets a
+new "Frontend recovery (Maypop)" section, and its rollback row now points
+there:
+
+- A rebuild of known source (`cc44449`'s `apps/web` plus v2's `env.ts` guard,
+  or PR B's previous head) is a **replacement artifact**, **not a byte-identical
+  restoration of v2**. Building it is verified; publishing it through Maypop is
+  **unverified**.
+- The downloaded v2 copy is **forensic evidence only**. It is incomplete and its
+  `index.html` contains Maypop's injections, so it is **never uploaded or
+  published**. It stays untouched in the scratchpad.
+- A published-version restore and "Revert, then publish" both stay
+  **unverified**.
+- Preserve the editor draft: no Done, Discard, Revert, sync or Unlink without
+  an approval that names the action.
+
+## Round 5b: archive verification and the TOC count (2026-10-19)
+
+Local only. No production connection, no browser, no push. The archive was
+read only by hashing it and with `pg_restore` 17.11 `--list` (the
+locally installed PostgreSQL 17.11 tools). No data was extracted. The
+intermediate listing files stayed inside the protected destination and were
+deleted afterwards.
+
+### Provenance (as reported by the lead)
+
+- **Who ran it:** another session of the user ran the backup, 2026-10-19
+  00:19:05–00:19:20Z, under the user's backup approval.
+- **This team's attempts:** two, both denied by the auto mode classifier; they
+  never ran.
+- **Codex:** did not run it; it only checked the PostgreSQL executable versions.
+
+### Archive identity (VERIFIED)
+
+| Fact | Value |
+| --- | --- |
+| File | `verity-20261019T001910Z.dump`, in the protected destination; operator-only access |
+| Size | 74,588 bytes, equal to the backup session's own record |
+| SHA-256 | `ce188e95cb4f9df748f9b551935be2644f5b35b0fb4a15718d7f4194346b8c6d`, equal to the backup session's own record: **MATCH** (reported to the lead and the verifier before the restore) |
+| Sidecar | `verity-20261019T001910Z.dump.sha256` next to the archive (`<sha256> *<file>`), operator-only |
+| Header | Format CUSTOM, gzip, dump version 1.16-0; dumped from 17.11 by `pg_dump` 17.11; created 2026-10-19 00:19:12Z (shown as 17:19:12 local); TOC entries 150 |
+| Times (backup session's record) | snapshot exported 00:19:12.120Z; dump 00:19:12.120Z–00:19:20.486Z; scope `public` + `drizzle` |
+
+The evidence README in the protected destination holds these facts plus the
+per-type inventory. The restore fields are filled in from the verifier's
+report. No row contents or credentials appear anywhere.
+
+### Why the header says 150 TOC entries and `--list` shows 143 (VERIFIED)
+
+| Listing | Entries |
+| --- | --- |
+| `pg_restore --list` | **143** |
+| By section: pre-data / data / post-data | 42 / 17 / 84 (sum 143) |
+| `pg_restore --list --verbose` | **150**, equal to the header |
+| `pg_restore --list --create` | 147 |
+
+The 143 listed entries, by type:
+
+| Type | Count | Type | Count |
+| --- | --- | --- | --- |
+| TABLE | 16 | FK CONSTRAINT | 19 |
+| TABLE DATA | 16 | TRIGGER | 3 |
+| SEQUENCE | 1 | FUNCTION | 2 |
+| SEQUENCE OWNED BY | 1 | ROW SECURITY | 15 |
+| SEQUENCE SET | 1 | ACL | 18 |
+| DEFAULT | 1 | DEFAULT ACL | 6 |
+| INDEX | 25 | COMMENT | 1 |
+| CONSTRAINT | 16 | SCHEMA | 2 |
+
+The 7 entries that appear only in the verbose listing:
+
+| Entries | Why they're hidden | Evidence |
+| --- | --- | --- |
+| `ENCODING`, `STDSTRINGS`, `SEARCHPATH` | pg_restore applies these settings itself when it opens the archive, and never lists them as restorable items | Shown only with `--verbose` |
+| `DATABASE`, `COMMENT` on the database, `ACL` on the database, `DATABASE PROPERTIES` (all for database `postgres`) | Database-level entries, acted on only with `--create` | `--list --create` shows 147 = 143 + these 4 |
+
+**Conclusion:** the gap is fully accounted for by entries the default listing
+hides by design. All 150 TOC entries are readable, and 143 + 3 + 4 = 150.
+
+What this does **not** establish:
+- **The archive is uncorrupted.** Only hashing and the TOC were read, never the
+  data blocks. A restore is what shows whether the data is usable.
+- **These entries are harmless.** That depends on the restore mode. Restoring
+  without `--create` into the disposable database skips the 4 database-level
+  entries, so the source database's comment, ACL and properties are not
+  restored. That's expected, and the restore checks cover the tables, rows and
+  migration history that matter.
 
