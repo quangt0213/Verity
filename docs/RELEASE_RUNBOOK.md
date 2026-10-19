@@ -147,16 +147,24 @@ Preconditions, all required:
    - **Inventory validation:** `pg_restore --list <dump>` reads the archive's
      table of contents. It proves the file is readable and lists the expected
      objects. It does **not** prove the dump can be restored.
-   - **Restore validation:** a full `pg_restore` into a throwaway database
-     (local, never production or any shared database), followed by these
-     checks:
+   - **Restore validation:** full `pg_restore` runs with PostgreSQL 17 tools
+     into new databases on a disposable local PostgreSQL 17 server (never
+     production or any shared database). There are two modes, a plain-data
+     restore and an owner-preserving restore. Then every check in the plan,
+     including:
      - all 15 Verity tables in `public` exist (every `CREATE TABLE` in
        0000–0005);
-     - row counts for the key tables (`users`, `events`, `reports`,
-       `source_records`, `community_signals`, `verification_jobs`,
-       `verification_runs`) equal the production counts taken read-only at
-       dump time;
-     - `drizzle.__drizzle_migrations` has exactly the 6 rows and hashes in item 2.
+     - the row counts of every `public` and `drizzle` table equal the counts
+       taken inside the snapshot that `pg_dump` used;
+     - `drizzle.__drizzle_migrations` has exactly the 6 rows and hashes in item 2;
+     - owners and the effective `anon`/`authenticated`/`service_role`
+       privileges equal production's.
+
+   **Freshness.** Production keeps accepting writes, so a backup goes stale
+   as soon as it is taken. Take the gate 2 backup and its restore validation
+   in the same window as the migration, immediately before it. An earlier
+   validated backup proves the procedure works and serves as a fallback, but
+   it is not the gate 2 backup. The 2026-10-19 00:19Z backup is one of these.
 
    **Restore validation is required for gate 2 approval.** The only exception
    is if the approver explicitly accepts inventory-only validation and the
@@ -496,7 +504,7 @@ extraction slots are used) stays deferred.
 
 | Situation | Action | Schema |
 | --- | --- | --- |
-| Frontend misbehaves after gate 6 | With "Approve rollback of the frontend to `<build>`". Old frontends never send a schedule, so going back is always schema-safe. **Known limits (2026-10-18):** Maypop's UI shows no published-version list with restore. The editor has an iteration history with Revert, but whether Revert plus publish restores v2 is unverified. The current v2's source is editor iteration 3 (`cc44449`'s `apps/web` plus an `env.ts` guard); a byte-exact copy of v2's files is kept locally as evidence, but it is incomplete (missing the Maypop SDK chunk) and its `index.html` holds Maypop's injections, so it must not be re-uploaded. The verified fallback is to republish a known source (`cc44449`'s `apps/web`, or PR B's previous head) through the same editor path; it is not byte-identical to v2. **Before gate 6, establish how Maypop restores a published version** | Keep 0006 |
+| Frontend misbehaves after gate 6 | With "Approve rollback of the frontend to `<build>`". Old frontends never send a schedule, so going back is always schema-safe. **No exact restore of v2 has been verified.** The options and their limits are in "Frontend recovery (Maypop)" below. **Before gate 6, establish how Maypop restores a published version** | Keep 0006 |
 | API or worker fails after gate 4 | With "Approve rollback of the API and worker to `cc44449`": in Railway, redeploy the previous deployment (`cc44449`) for both services. This also brings back `cc44449`'s job over-claim defect, harmless while every paid budget is 0. If the new frontend is already live, schedule-bearing reports get the "doesn't accept scheduled times yet" message; everything else works | Keep 0006: the old code ignores `report_schedules` |
 | Bad data or migration problem | Stop and report. Restore from the gate 2 backup only with "Approve restore from the gate 2 backup." | — |
 
@@ -514,6 +522,28 @@ COMMIT;
 
 This reversal was rehearsed on a throwaway PostgreSQL 18.6 (2026-10-17); it
 returned the database to its 0005 fingerprint.
+
+### Frontend recovery (Maypop)
+
+What is known, as of 2026-10-18: the published frontend is v2. Its source is
+Maypop editor iteration 3, which is `cc44449`'s `apps/web` plus a guard in
+`src/config/env.ts` and its test. Maypop rewrites `index.html` when it
+publishes (injected scripts and a version id).
+
+| Option | What it produces | Status |
+| --- | --- | --- |
+| A published-version restore in Maypop | v2 exactly, if Maypop offers one | **Unverified.** No published-version list or restore was seen in the UI |
+| Editor iteration "Revert", then publishing | Whatever Maypop builds from the reverted workspace | **Unverified**, both what Revert does and what publishing does afterwards. Not a rollback until proven |
+| Rebuild of known source (`cc44449`'s `apps/web` plus v2's `env.ts` guard, or PR B's previous head), then publishing | A **replacement artifact** with the same app behaviour as v2, **not a byte-identical restoration of v2**: different file hashes, slightly different CSS, a different toolchain | Building is verified locally. Publishing it through Maypop is **unverified** |
+| The downloaded copy of v2's files | **Forensic evidence only.** It's incomplete (missing the Maypop SDK chunk that loads only in the frame), and its `index.html` already contains Maypop's injections | **Never upload or publish it** |
+
+Until a recovery path is proven, keep what exists:
+- **The editor draft:** no Done, Discard, Revert, sync or Unlink without an
+  approval that names the action.
+- **The forensic copy:** leave it untouched where it is.
+
+Maypop's publication and rollback behaviour stays **unverified** in this runbook
+until it has been observed.
 
 ## Rehearsal of gates 2 and 3 (2026-10-17, throwaway local PostgreSQL 18)
 
