@@ -1,14 +1,60 @@
 # Verification workstream handoff
 
-Owner: `verifier`. Current branch: `team/verification-r4` (worktree `<worktrees>/verification`), based on `team/integration` = `d63c448`. Rounds 1–3 are integrated. Git, code and tests win over this file.
+Owner: `verifier`. Current branch: `team/verification-r5` (worktree `<worktrees>/verification`), based on `team/integration` = `1534ae2`. Rounds 1–4 are integrated. Git, code and tests win over this file.
 
 ## Status
 
-**REVIEW (round 4).**
-- **Worker defect fixed.** `claimJobs` ignored its limit, which was the root cause of the real-PG flake (see "Round 4" below).
-- **Migration connection assessed.** The direct host works with the migrator unchanged.
-- **Earlier rounds.** Round 3: the migrator classifies failures and names its session. Round 2: paid Nimble work is opt-in. A5 and V2 remain recommendations; V2 stays deferred.
-- Nothing was pushed, merged or deployed. No live Nimble, no production writes, and the migrator was never run against production.
+**Round 5b: production backup taken and restore-validated locally: PASS.** The dump ran from the user's own session (my attempts were denied by the permission classifier); the restore validation ran here.
+- **Plan corrected.** `docs/BACKUP_RESTORE_PLAN.md`: PostgreSQL 17, owners and ACLs kept, same-snapshot counts, restore modes a and b, the DROP guard, and the scope label.
+- **Rehearsal and re-rehearsal passed** on PG17.11 (synthetic data).
+- **Round 4** (integrated): the `claimJobs` claim-limit fix and the direct-host migration connection.
+- **Earlier rounds** (integrated): failure classification and session name (3), paid work opt-in (2). A5 and V2 remain recommendations; V2 stays deferred.
+- Nothing was pushed, merged or deployed. No live Nimble, no production writes, and the migrator was never run against production. This session never connected to production; round 5b's restore was local PG17 only.
+
+## Round 5: production backup (plan, scripts, PG17 rehearsal)
+
+Kept separate from the round 4 concurrency evidence below.
+
+- **Plan:** `docs/BACKUP_RESTORE_PLAN.md`, rewritten (commit `3cade18`). The rehearsal record and the destination layout are in the follow-up commit.
+- **Scripts:** `C:\Users\quang\verity-worktrees\ops-backup\` (not Git; no data, no secrets):
+  - `common.mjs`: the shared checks and fingerprint;
+  - `backup.mjs`: preflight, snapshot counts, `pg_dump` 17, inventory;
+  - `restore-validate.mjs`: the disposable PG17 server (scram-sha-256, in-memory random password, pwfile deleted after `initdb`, no `trust` rule, wrong password must be refused), the guard self-test (always first, same run), modes a and b, and every check;
+  - `rehearse-source.mts` and `rehearse-writer.mts`: rehearsal only.
+- **Tools:** `C:\Users\quang\verity-tools\pgsql-17.11\bin` (EDB zip, provided by the lead), used by absolute path.
+- **Destination** (prepared by map-perf): `C:\VerityBackups\2026-10-18\`, with `archive\`, `restore\` (data directory and all logs) and `evidence\` (facts).
+- **Rehearsal result: PASS** (details in the plan's "Local rehearsal" section):
+  - the snapshot counts survived 646 concurrent write batches exactly, in both modes;
+  - the guard refused 3 negative cases, and its positive control dropped;
+  - mode a and mode b both exited 0, and every check passed, including owners and the role fingerprint.
+- **Lead review additions, implemented and re-rehearsed: PASS** (plan, "Re-rehearsal after the lead's review"):
+  - preflight RLS visibility fails closed: FORCE RLS on one table stopped the backup before any dump; without it both booleans were true;
+  - restore server: 0 `trust` rules; wrong password refused (auth class, `28P01`); no-password `psql` refused; pwfile deleted;
+  - inventory reports unexpected entry types and non-Verity `public` objects by name without failing (demo: `VIEW public.extra_view`, `public.extra_fn()`; `DEFAULT drizzle.__drizzle_migrations id` is expected);
+  - final end to end with 647 concurrent write batches: archive in `<dest>rchive\`, facts in `<dest>\evidence\`, logs in `<dest>
+estore\logs\`; both modes and the guard self-test passed. Rehearsal servers stopped and deleted.
+- **Script defects found by the rehearsal, fixed:** SQLSTATE 42725 (`text || "char"` in the constraint fingerprint, fixed with `contype::text`; the preflight failed closed), and a `pg_ctl start` hang on inherited pipes (now no pipes).
+- **Production steps after GO:**
+  1. `node backup.mjs --pg-bin <pg17 bin> --dest C:\VerityBackups\2026-10-18 --source production`.
+  2. Give map-perf the archive file name (they write the `.sha256`).
+  3. `node restore-validate.mjs --pg-bin <pg17 bin> --dest C:\VerityBackups\2026-10-18 --archive <archive>`, which stops the server at the end.
+  4. Leave the restore resources for the lead to delete.
+
+## Round 5b: restore validation of the production archive (2026-10-19)
+
+- **Dump** (run by the user's own session, `backup.mjs --source production`): facts in `<dest>\evidenceackup-facts.json`.
+  - Preflight: server 17.11, TLS verified, IPv6, history 6/6, `report_schedules` absent, 15 tables, `noForcedRls` and `allRowsVisibleToDumpRole` true.
+  - Snapshot exported 00:19:12.120Z; `pg_dump` 17.11 00:19:12.120–00:19:20.486Z, exit 0. 90 rows across `public` + `drizzle`.
+  - Archive `verity-20261019T001910Z.dump`, 74,588 bytes, SHA-256 `ce188e95cb4f9df748f9b551935be2644f5b35b0fb4a15718d7f4194346b8c6d` (recomputed by map-perf: match).
+  - Inventory 143 entries: 15 + 1 tables, 2 `verity_*` functions, 3 triggers, 18 `ACL`, 6 `DEFAULT ACL`; unexpected only `DEFAULT drizzle.__drizzle_migrations id`; no non-Verity tables or functions.
+- **Role review before the restore, no script change:** the archive's OWNER/GRANT/REVOKE/`FOR ROLE` statements reference `anon`, `authenticated`, `pg_database_owner`, `postgres`, `service_role` and `supabase_admin` (the extra DEFAULT ACLs are `FOR ROLE supabase_admin`). `archiveRoles()` returns exactly that set, matching an independent per-statement parse. Mode b uses no `-L` or filter, so every ACL and DEFAULT ACL entry restores under `--exit-on-error`.
+- **Restore validation** (`restore-validate.mjs`, 03:52Z run, results in `<dest>\evidenceestore-results-20261019t035211z.json`):
+  - server 17.11 on 127.0.0.1:55433, `scram-sha-256`, 0 `trust` rules, wrong password refused (`28P01`), pwfile deleted;
+  - guard self-test PASS: non-empty `public` and wrong database refused, positive control dropped (the other-server case needs `--foreign-port` and was not part of the approved command);
+  - mode a: exit 0; every check true; 0 count mismatches;
+  - mode b: roles created NOLOGIN `anon`, `authenticated`, `service_role`, `supabase_admin`; exit 0; every check true, including `ownersEqual`, `clientRolesNoTablePrivileges` and `roleFingerprintEqual`; 0 count mismatches;
+  - observed = production: owners `reports` postgres, schema `public` pg_database_owner, functions postgres; `anon`/`authenticated` 0 of 7 table privileges, schema USAGE yes, CREATE no, 0 function EXECUTE; `service_role` 15/15 tables for all 7 privileges, USAGE yes, CREATE no, EXECUTE on 2 functions.
+  - The server is stopped. The data directory and logs stay under `<dest>estore\` for the lead to delete. The API and worker were never started against them.
 
 ## Round 4: claim limit (root cause of the flake) and the migration connection
 
