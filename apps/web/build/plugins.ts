@@ -101,3 +101,19 @@ export function cspMetaPlugin(inputs: CspInputs, enabled: boolean): Plugin {
     },
   };
 }
+
+/**
+ * Warm up the connection to the basemap host while the app's code loads:
+ * the style, tiles and glyphs are only requested once the map route has
+ * started. A hint, not a fetch, so it needs no CSP change.
+ */
+export function mapPreconnectPlugin(mapStyleUrls: string[]): Plugin {
+  const origins = [...new Set(mapStyleUrls.map(originOf).filter((o): o is string => o !== null))];
+  return {
+    name: "verity:map-preconnect",
+    apply: "build",
+    transformIndexHtml() {
+      return origins.map((href) => ({ tag: "link", attrs: { rel: "preconnect", href, crossorigin: "" }, injectTo: "head" as const }));
+    },
+  };
+}

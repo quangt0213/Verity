@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCsp, findSecretLikePublicVars } from "./plugins";
+import { buildCsp, findSecretLikePublicVars, mapPreconnectPlugin } from "./plugins";
 
 describe("public env guard", () => {
   it("flags secret-looking VITE_ variables", () => {
@@ -51,5 +51,19 @@ describe("buildCsp", () => {
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("frame-src 'none'");
     expect(csp).toContain("base-uri 'self'");
+  });
+});
+
+describe("mapPreconnectPlugin", () => {
+  it("adds one anonymous preconnect hint per basemap origin", () => {
+    const plugin = mapPreconnectPlugin([
+      "https://tiles.openfreemap.org/styles/positron",
+      "https://tiles.openfreemap.org/styles/dark",
+      "not a url",
+    ]);
+    const transform = plugin.transformIndexHtml as () => unknown;
+    expect(transform()).toEqual([
+      { tag: "link", attrs: { rel: "preconnect", href: "https://tiles.openfreemap.org", crossorigin: "" }, injectTo: "head" },
+    ]);
   });
 });

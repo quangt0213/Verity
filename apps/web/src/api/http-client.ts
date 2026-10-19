@@ -98,7 +98,7 @@ export function createHttpApi(baseUrl: string, options: HttpApiOptions = {}): Ve
       return {
         ok: false,
         status: null,
-        error: { code: timeout.aborted ? "unavailable" : "network", message: UNAVAILABLE_MESSAGE },
+        error: { code: timeout.aborted ? "unavailable" : "network", message: UNAVAILABLE_MESSAGE, outcomeUnknown: true },
       };
     }
 
@@ -116,10 +116,17 @@ export function createHttpApi(baseUrl: string, options: HttpApiOptions = {}): Ve
     if (response.status === 401 && session) sessions.set(null); // expired or revoked
     if (response.status >= 500 || !parsed.success) {
       // Unexpected bodies (stack traces, proxy pages) are discarded, never shown.
+      // A 5xx, or a reply that isn't the service's own error format (a proxy
+      // page), doesn't prove the request wasn't carried out: even the
+      // service's own 500 can follow a commit whose acknowledgement was lost.
       const fallback: WriteError =
         response.status >= 500
-          ? { code: "unavailable", message: UNAVAILABLE_MESSAGE }
-          : { code: response.status === 429 ? "rate_limited" : "validation_failed", message: `Request failed (${response.status})` };
+          ? { code: "unavailable", message: UNAVAILABLE_MESSAGE, outcomeUnknown: true }
+          : {
+              code: response.status === 429 ? "rate_limited" : "validation_failed",
+              message: `Request failed (${response.status})`,
+              outcomeUnknown: true,
+            };
       return { ok: false, status: response.status, error: fallback };
     }
     // The service's error messages are designed to be shown to users.
@@ -149,7 +156,8 @@ export function createHttpApi(baseUrl: string, options: HttpApiOptions = {}): Ve
     const result = await send(path, { method, body, auth: true });
     if (!result.ok) return { ok: false, error: result.error };
     const parsed = schema.safeParse(result.body);
-    if (!parsed.success) return { ok: false, error: { code: "unavailable", message: UNAVAILABLE_MESSAGE } };
+    // A success status with an unreadable body: the write probably happened.
+    if (!parsed.success) return { ok: false, error: { code: "unavailable", message: UNAVAILABLE_MESSAGE, outcomeUnknown: true } };
     return { ok: true, data: parsed.data, simulated: false };
   }
 
