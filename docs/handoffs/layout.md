@@ -3,8 +3,8 @@
 | | |
 | --- | --- |
 | Owner | `layout` |
-| Branch | `team/layout-r4` (worktree `<worktrees>/layout-fixes`), from `d63c448`. Earlier rounds: `team/layout-r3`, `team/layout-r2`, `team/layout-fixes` |
-| Stage | REVIEW: round 4 (published v2 × candidate backend) done |
+| Branch | `team/layout-r5` (worktree `<worktrees>/layout-fixes`), from `1534ae2`. Earlier rounds: `team/layout-r4` … `team/layout-fixes` |
+| Stage | REVIEW: round 5 (bounded v2 × candidate-backend review) done |
 | Last updated | 2026-10-18 |
 
 ## Goal
@@ -15,6 +15,115 @@ inside Maypop's cross-site iframe. Mobile overlays never cover each other or
 leave the screen, the sheet respects the safe area, and the desktop sidebar
 width adapts from 1024 px up. Follow-up: the feed stays cheap to render with
 500 events, and the report form's schedule fields match the rest of the form.
+
+## Round 5: bounded v2 × candidate-backend review
+
+Branch `team/layout-r5` from `1534ae2`. Docs only; no frontend change, no
+production access.
+
+The candidate API is unchanged since round 4 where it matters:
+- `release/backend` is now `d1b9044`. Its `apps/api`, `packages/contracts` and
+  lockfile equal `1534ae2`'s.
+- Since round 4's `19db3e1`, the only API change is the worker's job claim
+  (`worker/jobs.ts`, a claim-limit fix).
+- No HTTP route or contract changed, so round 4's evidence still applies.
+
+### 1. What round 4 covered
+
+Covered by running the unmodified v2 against the local candidate API, desktop
+and top-level:
+- map and list;
+- event detail;
+- a report without a schedule;
+- 400 / Verity 500 / proxy 502 / network failure: input kept, one POST, no
+  auto-resubmit;
+- lost answer then a manual resubmit: a second report is stored;
+- Following and Settings reads.
+
+Covered statically:
+- v2 equals `cc44449` `apps/web` by string and API-surface fingerprint;
+- the response contracts are unchanged;
+- v2 never sends `scheduled_*`.
+
+Not covered in round 4:
+- phone width inside the Maypop sandboxed iframe;
+- the console inside the Maypop page;
+- signal and follow writes;
+- worker-produced data;
+- safe area and keyboard on the report form;
+- the candidate API without 0006;
+- Maypop SDK features (theme, sign-in chip, share, deep links, geolocation
+  permission).
+
+### 2. Remaining coverage before publication, and how each can be checked
+
+| Item | Local | Read-only observation of the published page | Only after publication | Status now |
+| --- | --- | --- | --- | --- |
+| Phone width inside the sandboxed iframe | v2: the round-5 harness (R5-B). PR B: `layout.spec.ts` "mobile map inside a Maypop-like cross-site iframe" (375×667, 390×844) | A phone or narrow window on the Maypop page: sheet peeks, map visible, Report button visible | Real iOS/Android inside the Maypop app shell | **v2 VERIFIED locally** (with the known document-overflow bug, below). **PR B VERIFIED locally** |
+| Console inside the Maypop page | Local harness: console of the app frame (R5-B: none) | Host page plus frame console, with tracking started **before** load (gate 1 started after) | — | App frame **VERIFIED locally**; Maypop host page **UNVERIFIED** (observation) |
+| Signal and follow writes | v2 against the local API with a local dev-outbox session (R5-C) | No: these are writes | Production writes need explicit approval; not an observation item | **VERIFIED locally**: POST `/follow` 200 (button "Following", listed on Following), POST `/signals` 201 |
+| Worker-produced data | The real worker pipeline (`processJob`, mocked Nimble HTTP, PGlite), then the API's JSON served to v2 (R5-A) | Existing production events already carry worker data (gate 1: the detail rendered with "re-check queued") | Live Nimble output with paid budgets on (verifier's area) | **VERIFIED locally** for LIKELY with extracted sources, and for a queued/unavailable retrieval. Live provider variety **UNVERIFIED** |
+| Safe area (home indicator) | PR B: `layout.spec.ts` safe-area test via CDP emulation, top-level. v2 has no safe-area handling (fixed 148 px peek) | A phone with a home indicator on the Maypop page | Real device in the Maypop shell | **UNVERIFIED in the iframe.** Inside an iframe `env(safe-area-inset-*)` resolves to 0, so the Maypop shell owns the insets (its `host.js` sizes the frame from `visualViewport`). Needs a device |
+| Keyboard on the report form | R5-B: focusing "Short title" in the 390×844 iframe keeps it in view. The on-screen keyboard can't be emulated | A phone: tap into a field (no submit). The field and the Submit button must stay reachable | — | Focus **VERIFIED locally**; on-screen keyboard **UNVERIFIED** |
+| Candidate API without 0006 | Not with PGlite: the dev server always migrates | No | — | **UNVERIFIED by run**; by code v2 never touches `report_schedules` |
+| Maypop SDK features: host theme sync, sign-in chip, share sheet, deep link `launchPath`, geolocation permission (`allow=geolocation`) | No local Maypop host (the SDK runs only inside the real shell) | Theme and layout: yes. Sign-in chip, share and "Near me": **don't press** (auth flow, outward action, permission prompt) | Deep links from a real notification; geolocation on a device | **UNVERIFIED** (observation or after publication) |
+
+### 3. Runs this round (2026-10-18)
+
+Setup: the same as round 4.
+- v2 is served unmodified on 127.0.0.1:4389.
+- The candidate API from this worktree (PGlite, demo seed, 0000–0006) runs on
+  127.0.0.1:4388.
+- Every production-API request is answered locally by `context.route` (local
+  API or captured JSON); nothing is continued to the network.
+- The sandboxed host page runs on `localhost:4387`, with Maypop's sandbox flags,
+  minus the `allow=` feature list.
+- Scripts in `<scratchpad>/r5/`, not committed: `worker-capture.test.ts` (run
+  with `npx vitest run --config <scratchpad>/r5/vitest.r5.config.ts` from
+  `apps/api`) and `v2-r5.mjs`.
+
+| Run | Command | Result |
+| --- | --- | --- |
+| Worker capture | `npx vitest run --config …/vitest.r5.config.ts` | 1 passed. Captured details validate against `eventDetailSchema`; one LIKELY (3 independent sources, extracted pages), one UNVERIFIED with `verification_state: queued` after an unavailable retrieval |
+| R5-A worker data in v2 | `node v2-r5.mjs` | 2 cards. Detail 1 shows "Likely · 3 independent sources · checked 2 min ago"; detail 2 shows "Unverified · 1 source · verification queued". Both have "Why Verity says this" and Sources, no error state, no console errors |
+| R5-B v2, 390×844, in the sandboxed iframe | `node v2-r5.mjs` | Map ready, sheet peek 148 px and half 409 px, cards and Report button visible, detail opens, report form OK, title focus in view, host `scrollTop` 0, no console errors. **Known v2 bug:** the frame's document overflows by 1,608 px at peek (449 on detail; `scrollTop` stayed 0). This is the `sr-only` overflow fixed in PR B |
+| R5-C v2 writes, local API | `node v2-r5.mjs` (fresh local user per run) | Report 201, Follow 200 (aria-pressed true, 1 card on Following), community answer "Yes" → `/signals` 201, no console errors |
+| PR B main suite | `PW_CHANNEL=chrome npx playwright test` (e2e lock held) | 57 passed, 21 skipped |
+| PR B mobile layout | `PW_CHANNEL=chrome npx playwright test e2e/layout.spec.ts --project mobile` | 11 passed, 4 skipped, including both mobile-iframe sizes and the safe-area emulation |
+| PR B service suite | `PW_CHANNEL=chrome npm run test:e2e:service` | 2 passed |
+
+The first R5-C attempt failed in the harness, not the app. The same local user
+had already followed the event its report attached to, so the button read
+"Following". The rerun uses a fresh user and passed.
+
+### 4. Uncertain resubmission: the limitation, stated exactly
+
+- Neither v2 nor PR B nor the candidate API has **server-side idempotency** for
+  reports. There is no client request key, and the server doesn't dedupe by
+  reporter. A manual resubmit after a lost response **stores a second report**.
+  Verified for v2 in round 4; PR B sends the identical body on a resubmit
+  (round-3 unit test).
+- **Impact** (verified locally, and from `domain/reports.ts` / `dedupe.ts`):
+  - The resubmit **usually attaches to the same event**: same place, category
+    and words. An ambiguous runner-up within 0.05 can still make a separate
+    event.
+  - It **does not inflate independent sources**: the community lineage counts
+    once. `independent_source_count` stayed 1 with 3 reports.
+  - It **does** add a report row, a community source record (`source_count` +1),
+    a "Similar community report attached" timeline entry and another
+    verification job. That job is keyed per report; whether the worker
+    coalesces it is the verifier's area.
+- **What PR B changes:** messaging only.
+  - It says "We couldn't confirm whether your report was received. Everything
+    you entered is still here." and offers an arrival check that reads the
+    public event list.
+  - The check is a heuristic. "It arrived" is a strong signal; "most likely
+    didn't arrive" can be wrong, for example with client clock skew beyond 10 min.
+  - PR B does **not** prevent duplicates. A user who resubmits, with or without
+    the check, can still create one.
+- Real prevention needs a server change: a client-generated idempotency key
+  stored with the report, or reporter-level dedupe. That's backend work, not
+  in this sprint.
 
 ## Published v2 frontend × candidate backend (round 4)
 
@@ -82,18 +191,19 @@ So v2 behaves as `cc44449`'s `apps/web` with the production API URL compiled in:
 | Network failure | **VERIFIED** (aborted request) | same as 500 |
 | Committed, then the answer was lost (502), then the user resubmits | **VERIFIED** | both POSTs stored (201); the event shows 3 reports ("Similar community report attached" ×2), `independent_source_count` stays 1. v2 gives no hint that the first may have arrived |
 | Following / Settings (authenticated reads) | **VERIFIED** ✓ | `GET /me/following` 200 and the empty state; Settings shows the signed-in account |
-| Signals, follow (authenticated writes) | **UNVERIFIED** | skipped as instructed (they need auth); same contracts, so expected to work |
+| Signals, follow (authenticated writes) | **VERIFIED in round 5** | skipped in round 4; round 5 R5-C: follow 200, signal 201, against the local API only |
 | Candidate API **without** 0006 | **UNVERIFIED by run** | the local PGlite server always migrates. By code: `createReport` touches `report_schedules` only when `scheduled_start_at` is set, and v2 never sends it |
-| Worker-produced data (real verification, extended evidence) | **UNVERIFIED** | no worker locally; response contracts are identical, so v2's strict enums accept anything the candidate can emit |
-| Inside Maypop (iframe, SDK) | **UNVERIFIED** | run top-level; production observation is the lead's |
+| Worker-produced data (real verification, extended evidence) | **VERIFIED locally in round 5** (mocked provider HTTP) | round 5 R5-A: worker-pipeline output (LIKELY with extracted sources; queued after an unavailable retrieval) renders in v2. Live provider output remains unverified |
+| Inside Maypop (iframe, SDK) | **Partly, round 5** | sandboxed cross-origin iframe at 390×844 verified locally (R5-B); the Maypop SDK and host page need observation of the published page |
 
-**v2 behaviors that PR B fixes**, relevant while v2 stays live against the new
+**v2 behaviors that PR B changes**, relevant while v2 stays live against the new
 API:
 - **Uncertain outcomes:** v2 says only "Verity is temporarily unavailable." on
   500, 502 or a network error. It has no "couldn't confirm" wording and no
   arrival check, so a resubmit after a lost answer adds a second report from the
   same user (shown above). It attaches to the same event and doesn't raise
-  independence, but it's still a duplicate report.
+  independence, but it's still a duplicate report. PR B improves the message and
+  adds a check; it does **not** prevent the duplicate (see round 5, §4).
 - **Input is kept** on every failure (verified). v2 **does not auto-resubmit**
   (verified).
 - **Double submit:** v2 relies on the disabled button only (no in-flight
@@ -441,12 +551,14 @@ The follow-up needs no MapShell change.
 
 ## Remaining risks
 
-- Between PR A and PR B, v2 can create duplicate reports when an answer is
-  lost and the user resubmits (verified locally). They attach to the same event
-  and don't raise independence.
+- Duplicate reports from a manual resubmit after a lost answer: possible with
+  v2 (verified locally) **and with PR B**. There's no server-side idempotency.
+  They usually attach to the same event and don't raise independent sources,
+  but each adds a report, a source record, a timeline entry and a verification
+  job (round 5, §4).
 
-- Reports: an unknown outcome can be a duplicate if the user resends without
-  checking; the arrival check depends on the event list reflecting the write
+- Reports: the arrival check is a heuristic and doesn't stop a resend, so a
+  duplicate stays possible after an unknown outcome. The check depends on the event list reflecting the write
   (same database, no cache) and on the client clock being within 10 min of the
   server.
 - Round 2: detecting "schedules not supported" relies on the old API's error
