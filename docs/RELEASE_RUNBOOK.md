@@ -147,16 +147,24 @@ Preconditions, all required:
    - **Inventory validation:** `pg_restore --list <dump>` reads the archive's
      table of contents. It proves the file is readable and lists the expected
      objects. It does **not** prove the dump can be restored.
-   - **Restore validation:** a full `pg_restore` into a throwaway database
-     (local, never production or any shared database), followed by these
-     checks:
+   - **Restore validation:** full `pg_restore` runs with PostgreSQL 17 tools
+     into new databases on a disposable local PostgreSQL 17 server (never
+     production or any shared database). There are two modes, a plain-data
+     restore and an owner-preserving restore. Then every check in the plan,
+     including:
      - all 15 Verity tables in `public` exist (every `CREATE TABLE` in
        0000–0005);
-     - row counts for the key tables (`users`, `events`, `reports`,
-       `source_records`, `community_signals`, `verification_jobs`,
-       `verification_runs`) equal the production counts taken read-only at
-       dump time;
-     - `drizzle.__drizzle_migrations` has exactly the 6 rows and hashes in item 2.
+     - the row counts of every `public` and `drizzle` table equal the counts
+       taken inside the snapshot that `pg_dump` used;
+     - `drizzle.__drizzle_migrations` has exactly the 6 rows and hashes in item 2;
+     - owners and the effective `anon`/`authenticated`/`service_role`
+       privileges equal production's.
+
+   **Freshness.** Production keeps accepting writes, so a backup goes stale
+   as soon as it is taken. Take the gate 2 backup and its restore validation
+   in the same window as the migration, immediately before it. An earlier
+   validated backup proves the procedure works and serves as a fallback, but
+   it is not the gate 2 backup. The 2026-10-19 00:19Z backup is one of these.
 
    **Restore validation is required for gate 2 approval.** The only exception
    is if the approver explicitly accepts inventory-only validation and the
