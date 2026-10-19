@@ -814,3 +814,30 @@ What this does **not** establish:
   restored. That's expected, and the restore checks cover the tables, rows and
   migration history that matter.
 
+**Restore validation: PASS** (reported by the verifier; run 2026-10-19 03:52Z on
+a disposable local PostgreSQL 17.11 bound to loopback, with password auth and
+no trust rules). Recorded in the evidence README, facts only.
+
+| Mode | Result |
+| --- | --- |
+| (a) Data only, without owners or privileges | Exit 0, no error class, 0 count mismatches |
+| (b) Fidelity, with owners and ACLs | Exit 0, no error class, 0 count mismatches |
+
+Both modes passed every check:
+- 15 tables plus `drizzle`;
+- row counts equal the snapshot;
+- 6 migration rows matching the runbook;
+- `report_schedules` absent;
+- functions, triggers, constraints, indexes, policies and RLS equal to
+  production.
+
+Mode (b) also passed three checks against production's preflight: owners
+equal, no client-role table privileges, role fingerprint equal.
+
+Mode (b) needed the archive's Supabase roles. They were created locally as
+`NOLOGIN` without passwords.
+
+The restore server is stopped, and its data directory stays in the protected
+destination until the lead decides on disposal. The API and worker never ran
+against it.
+
