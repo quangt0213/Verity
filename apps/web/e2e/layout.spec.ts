@@ -148,6 +148,8 @@ test.describe("desktop map layout", () => {
       await expectPinned(page.mainFrame(), `${width}px`);
       await page.setViewportSize({ width: width + 200, height: 900 });
       await expect.poll(async () => (await measure(page.mainFrame())).map?.bottom).toBe(900);
+      // MapLibre resizes its canvas a frame after the container.
+      await expect.poll(async () => (await measure(page.mainFrame())).canvas?.bottom).toBe(900);
       await expectPinned(page.mainFrame(), `${width}px resized`);
     });
   }

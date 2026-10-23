@@ -189,6 +189,15 @@
   transition: bottom 200ms ease-out;
 }
 [data-sheet-inset="with-report"] .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib {
-  /* While the Report button shows, leave room for it on the right (with the compact toggle and margins). */
-  max-width: calc(100vw - 190px);
+  /*
+   * While the Report button shows, leave room for it on the right. MapLibre's
+   * compact attribution is content-box with 36px of side padding (toggle
+   * included), so size the whole box. The room left is no more than the
+   * Report button takes: its 20px icon plus rem-sized padding, gap, label and
+   * 1rem edge offset (about 41px + 6.75rem), the attribution's 10px margin and
+   * an 8px gap. Any more and the attribution, narrower, grows up into the map key.
+   */
+  box-sizing: border-box;
+  min-height: 24px; /* MapLibre's 20px content plus its 2px top and bottom padding */
+  max-width: calc(100vw - 59px - 6.75rem);
 }

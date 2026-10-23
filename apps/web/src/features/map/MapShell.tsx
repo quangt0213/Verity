@@ -168,26 +168,30 @@ export function MapShell() {
           />
 
           {/* Map overlays */}
-          <div className="pointer-events-none absolute top-3 left-3 z-10 flex flex-col items-start gap-2">
-            <button
-              type="button"
-              onClick={nearMe}
-              disabled={locating}
-              aria-label={locating ? "Locating…" : "Near me"}
-              className="pointer-events-auto inline-flex h-11 items-center gap-1.5 rounded-xl bg-surface/95 px-3 text-sm font-medium shadow-md ring-1 ring-line backdrop-blur hover:bg-surface disabled:opacity-60"
-            >
-              <Icon icon={LocateFixed} size={17} className={locating ? "animate-pulse" : undefined} />
-              {/* Icon only on the narrowest phones, so the "Zoom in" hint fits between the corner controls. */}
-              <span className="hidden min-[390px]:inline">{locating ? "Locating…" : "Near me"}</span>
-            </button>
+          <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-col items-start gap-2">
+            {/* One row, so the "Zoom in" hint only gets the space between Near me and the zoom control, whatever the font. */}
+            <div className="flex w-full items-start gap-2">
+              <button
+                type="button"
+                onClick={nearMe}
+                disabled={locating}
+                aria-label={locating ? "Locating…" : "Near me"}
+                className="pointer-events-auto inline-flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-surface/95 px-3 text-sm font-medium shadow-md ring-1 ring-line backdrop-blur hover:bg-surface disabled:opacity-60"
+              >
+                <Icon icon={LocateFixed} size={17} className={locating ? "animate-pulse" : undefined} />
+                {/* Icon only on the narrowest phones, so the "Zoom in" hint fits between the corner controls. */}
+                <span className="hidden min-[390px]:inline">{locating ? "Locating…" : "Near me"}</span>
+              </button>
+              {zoomedOut && (
+                <div className="flex min-w-0 flex-1 justify-center">
+                  <p className="rounded-full bg-fg/85 px-3 py-1.5 text-center text-xs font-medium text-bg shadow">Zoom in to see events</p>
+                </div>
+              )}
+              {/* Room for MapLibre's zoom control (40px wide, 10px from the edge). */}
+              <div aria-hidden className="ml-auto w-10 shrink-0" />
+            </div>
             {mapStatus === "ready" && <MapLegend />}
           </div>
-
-          {zoomedOut && (
-            <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
-              <p className="rounded-full bg-fg/85 px-3 py-1.5 text-xs font-medium text-bg shadow">Zoom in to see events</p>
-            </div>
-          )}
 
           {/* On mobile the preview sits above the sheet; a full sheet leaves no room for it. */}
           {preview && (isDesktop || sheet !== "full") && (
