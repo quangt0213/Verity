@@ -61,13 +61,17 @@ describe.skipIf(!target)("worker on real PostgreSQL", () => {
     return lease;
   }
 
-  it("applied migrations 0000-0005 to the throwaway database", async () => {
+  it("applied migrations 0000-0006 to the throwaway database", async () => {
     const [m] = (await t.a.db.execute(sql`select count(*)::int as n from drizzle.__drizzle_migrations`)) as unknown as Array<{ n: number }>;
-    expect(m!.n).toBe(6);
+    expect(m!.n).toBe(7);
     const [cols] = (await t.a.db.execute(
       sql`select count(*)::int as n from information_schema.columns where table_name = 'verification_runs' and column_name in ('extract_count', 'agent_id', 'agent_cleaned_up_at')`,
     )) as unknown as Array<{ n: number }>;
     expect(cols!.n).toBe(3);
+    const [schedules] = (await t.a.db.execute(
+      sql`select relrowsecurity as rls from pg_class where oid = to_regclass('public.report_schedules')`,
+    )) as unknown as Array<{ rls: boolean }>;
+    expect(schedules?.rls).toBe(true);
   });
 
   it("serializes concurrent reports at one place (advisory lock): one event, every report attached", async () => {
@@ -210,9 +214,22 @@ describe.skipIf(!target)("worker on real PostgreSQL", () => {
   });
 
   it("runs two workers end to end on separate connections: every job processed exactly once (mocked providers)", async () => {
+    // Isolation: this test owns a fresh database. The earlier tests in this file leave ready jobs behind
+    // (claimed-and-abandoned leases, pending wakeups); in a shared database those older jobs are claimed
+    // first, and a loop that stops when a claim holds none of "its" jobs would quit before doing its work.
+    const own = await throwawayDatabase("verity_e2e");
+    try {
+      await runTwoWorkers(own);
+    } finally {
+      await own.drop();
+    }
+  }, 120_000);
+
+  async function runTwoWorkers(t: Throwaway) {
+    const ownUsers = (await t.a.db.insert(users).values(Array.from({ length: 6 }, (_, i) => ({ email: `e2e-${i}-${t.name}@example.com` }))).returning({ id: users.id })).map((r) => r.id);
     const clock = new FakeClock(Date.now() + 5_000);
     const created: string[] = [];
-    for (let i = 0; i < 8; i++) created.push((await createReport(t.a.db, userIds[6 + (i % 6)]!, payload())).event_id);
+    for (let i = 0; i < 8; i++) created.push((await createReport(t.a.db, ownUsers[i % 6]!, payload())).event_id);
     await t.a.db.execute(sql`update verification_jobs set available_at = ${clock.now().toISOString()} where status = 'pending'`);
     const deps = (db: Throwaway["a"]["db"]): WorkerDeps => ({
       db,
@@ -229,7 +246,10 @@ describe.skipIf(!target)("worker on real PostgreSQL", () => {
     const worker = async (db: Throwaway["a"]["db"], id: string) => {
       const processed: string[] = [];
       for (;;) {
-        const leases = (await claimJobs(db, { workerId: id, limit: 2, now: clock.now() })).filter((l) => created.includes(l.eventId));
+        // Every job in this database is one of ours; a worker stops only when nothing is claimable.
+        const leases = await claimJobs(db, { workerId: id, limit: 2, now: clock.now() });
+        expect(leases.length).toBeLessThanOrEqual(2);
+        expect(leases.every((l) => created.includes(l.eventId))).toBe(true);
         if (leases.length === 0) break;
         for (const lease of leases) {
           await processJob(deps(db), lease);
@@ -255,5 +275,10 @@ describe.skipIf(!target)("worker on real PostgreSQL", () => {
     const [r] = (await t.a.db.execute(sql`select count(*)::int as n from reports where event_id in ${created}`)) as unknown as Array<{ n: number }>;
     expect(r!.n).toBe(created.length);
     expect(reports).toBeDefined();
-  }, 120_000);
+    // Nothing is left claimed: no stranded leases.
+    const [running] = (await t.a.db.execute(sql`select count(*)::int as n from verification_jobs where status = 'running'`)) as unknown as Array<{ n: number }>;
+    expect(running!.n).toBe(0);
+    // Every report job was processed, by exactly one of the two workers.
+    expect(all).toHaveLength(created.length);
+  }
 });

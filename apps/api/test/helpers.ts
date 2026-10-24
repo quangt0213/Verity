@@ -25,7 +25,11 @@ export interface TestContext {
 
 export async function createTestContext(
   env: Record<string, string> = {},
-  options: { beforeMigrate?: (db: Database) => Promise<void> } = {},
+  options: {
+    beforeMigrate?: (db: Database) => Promise<void>;
+    /** Replaces the full migration (e.g. to stop at an older schema for partial-deploy tests). */
+    migrate?: (db: Database) => Promise<void>;
+  } = {},
 ): Promise<TestContext> {
   const config = loadConfig({
     NODE_ENV: "test",
@@ -35,7 +39,7 @@ export async function createTestContext(
   });
   const database = createDatabase("pglite:memory");
   await options.beforeMigrate?.(database.db);
-  await database.migrate();
+  await (options.migrate ? options.migrate(database.db) : database.migrate());
   const mailer = memoryMailer();
   const app = await buildApp({ config, db: database.db, mailer });
 

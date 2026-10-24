@@ -3,7 +3,7 @@ import { claimJobs } from "./jobs";
 import { processJob, type WorkerDeps } from "./process";
 import { reapExpiredLeases } from "./settle";
 import { sweepAgentResources } from "./escalate";
-import { sweepAging } from "./sweep";
+import { sweepAging, type SweepCursor } from "./sweep";
 
 /**
  * The worker's scheduling loop: reap expired leases, run the aging sweep when
@@ -14,13 +14,15 @@ export function createWorker(deps: WorkerDeps & { workerId: string }) {
   const policy = deps.policy ?? DEFAULT_POLICY;
   const inFlight = new Set<Promise<unknown>>();
   let lastSweep = 0;
+  // Each sweep continues where the previous one stopped, so every event is reached (sweep.ts).
+  const sweepCursor: SweepCursor = { after: null };
 
   async function tick(): Promise<{ claimed: number }> {
     const now = deps.now();
     await reapExpiredLeases(deps.db, { now, leaseSeconds: deps.config.leaseSeconds, random: deps.random, policy });
     if (now.getTime() - lastSweep >= policy.sweep.intervalMinutes * 60_000) {
       lastSweep = now.getTime();
-      const swept = await sweepAging(deps.db, { now, policy });
+      const swept = await sweepAging(deps.db, { now, policy, cursor: sweepCursor });
       if (swept.length > 0) deps.log.info({ swept: swept.length }, "aging sweep applied");
       // Leftover agent resources whose cleanup failed earlier (free calls, a few per sweep).
       const cleaned = await sweepAgentResources(deps.db, deps.investigator, deps.now);

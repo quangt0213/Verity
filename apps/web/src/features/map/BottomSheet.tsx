@@ -1,20 +1,30 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "../../lib/cn";
 import type { SheetSnap } from "./shell-context";
 
-const PEEK_PX = 148;
+/** Smallest peek height; it grows when the header wraps or the device has a bottom safe area. */
+export const PEEK_MIN_PX = 148;
 
-export function sheetHeight(snap: SheetSnap, containerHeight: number): number {
-  if (snap === "peek") return Math.min(PEEK_PX, containerHeight);
-  if (snap === "half") return Math.round(containerHeight * 0.52);
-  return Math.max(PEEK_PX, containerHeight - 12);
+export function sheetHeight(snap: SheetSnap, containerHeight: number, peekPx = PEEK_MIN_PX): number {
+  const peek = Math.min(peekPx, containerHeight);
+  if (snap === "peek") return peek;
+  if (snap === "half") return Math.max(peek, Math.round(containerHeight * 0.52));
+  return Math.max(peek, containerHeight - 12);
 }
 
-function nearestSnap(height: number, containerHeight: number): SheetSnap {
+export function nearestSnap(height: number, containerHeight: number, peekPx = PEEK_MIN_PX): SheetSnap {
   const options: SheetSnap[] = ["peek", "half", "full"];
   return options.reduce((best, snap) =>
-    Math.abs(sheetHeight(snap, containerHeight) - height) < Math.abs(sheetHeight(best, containerHeight) - height) ? snap : best,
+    Math.abs(sheetHeight(snap, containerHeight, peekPx) - height) < Math.abs(sheetHeight(best, containerHeight, peekPx) - height) ? snap : best,
   );
+}
+
+/**
+ * Peek shows the handle and the whole header (`headerBottomPx` is the header's
+ * bottom edge within the sheet), plus the bottom safe area (home indicator).
+ */
+export function peekHeight(headerBottomPx: number, safeAreaBottomPx: number): number {
+  return Math.max(PEEK_MIN_PX, headerBottomPx) + safeAreaBottomPx;
 }
 
 const NEXT: Record<SheetSnap, SheetSnap> = { peek: "half", half: "full", full: "peek" };
@@ -22,6 +32,10 @@ const NEXT: Record<SheetSnap, SheetSnap> = { peek: "half", half: "full", full: "
 /**
  * Mobile event sheet with three snap points. The handle is a real button
  * (tap/Enter cycles sizes); dragging is an enhancement for touch users.
+ *
+ * A drag writes the height straight to the DOM once per animation frame, so it
+ * doesn't re-render the sheet or its contents; React state changes only when a
+ * drag starts and ends.
  */
 export function BottomSheet({
   snap,
@@ -39,37 +53,64 @@ export function BottomSheet({
   label: string;
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
   const [containerHeight, setContainerHeight] = useState(600);
-  const [dragHeight, setDragHeight] = useState<number | null>(null);
-  const drag = useRef<{ startY: number; startHeight: number; moved: boolean } | null>(null);
+  const [peekPx, setPeekPx] = useState(PEEK_MIN_PX);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{ startY: number; startHeight: number; height: number; moved: boolean } | null>(null);
+  const frame = useRef(0);
   const suppressClick = useRef(false);
+  const hasHeader = Boolean(header);
 
   useEffect(() => {
-    const parent = sheetRef.current?.parentElement;
-    if (!parent) return;
-    const update = () => setContainerHeight(parent.clientHeight);
+    const sheet = sheetRef.current;
+    const parent = sheet?.parentElement;
+    if (!sheet || !parent) return;
+    const update = () => {
+      setContainerHeight(parent.clientHeight);
+      // The sheet's bottom padding is env(safe-area-inset-bottom).
+      const safeArea = parseFloat(getComputedStyle(sheet).paddingBottom) || 0;
+      const head = headerRef.current;
+      setPeekPx(peekHeight(head ? head.offsetTop + head.offsetHeight : 0, safeArea));
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(parent);
+    if (headerRef.current) observer.observe(headerRef.current);
     return () => observer.disconnect();
-  }, []);
+  }, [hasHeader]);
 
-  const height = dragHeight ?? sheetHeight(snap, containerHeight);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+
+  const height = sheetHeight(snap, containerHeight, peekPx);
+
+  // Outside a drag the snapped height is applied here rather than through the
+  // style prop, so it also replaces whatever height the last drag wrote.
+  useLayoutEffect(() => {
+    if (!dragging && sheetRef.current) sheetRef.current.style.height = `${height}px`;
+  }, [height, dragging]);
 
   useEffect(() => {
-    if (dragHeight === null) onHeightChange?.(height);
-  }, [height, dragHeight, onHeightChange]);
+    if (!dragging) onHeightChange?.(height);
+  }, [height, dragging, onHeightChange]);
+
+  const endDrag = () => {
+    cancelAnimationFrame(frame.current);
+    drag.current = null;
+    setDragging(false);
+  };
 
   return (
     <div
       ref={sheetRef}
       role="region"
       aria-label={label}
+      data-snap={snap}
       className={cn(
         "absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-3xl bg-surface shadow-[0_-8px_30px_rgba(0,0,0,0.12)] ring-1 ring-line",
-        dragHeight === null && "transition-[height] duration-200 ease-out motion-reduce:transition-none",
+        !dragging && "transition-[height] duration-200 ease-out motion-reduce:transition-none",
       )}
-      style={{ height }}
+      style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
       <button
         type="button"
@@ -77,24 +118,31 @@ export function BottomSheet({
         aria-label={snap === "full" ? "Collapse event list" : "Expand event list"}
         aria-expanded={snap !== "peek"}
         onPointerDown={(e) => {
-          drag.current = { startY: e.clientY, startHeight: height, moved: false };
-          e.currentTarget.setPointerCapture(e.pointerId);
+          drag.current = { startY: e.clientY, startHeight: height, height, moved: false };
+          e.currentTarget.setPointerCapture?.(e.pointerId);
         }}
         onPointerMove={(e) => {
           const d = drag.current;
           if (!d) return;
           const delta = d.startY - e.clientY;
-          if (Math.abs(delta) > 4) d.moved = true;
-          if (d.moved) setDragHeight(Math.min(containerHeight - 12, Math.max(96, d.startHeight + delta)));
+          if (!d.moved && Math.abs(delta) > 4) {
+            d.moved = true;
+            setDragging(true);
+          }
+          if (!d.moved) return;
+          d.height = Math.min(containerHeight - 12, Math.max(96, d.startHeight + delta));
+          cancelAnimationFrame(frame.current);
+          frame.current = requestAnimationFrame(() => {
+            if (drag.current && sheetRef.current) sheetRef.current.style.height = `${drag.current.height}px`;
+          });
         }}
         onPointerUp={() => {
           const d = drag.current;
-          drag.current = null;
-          if (d?.moved && dragHeight !== null) {
-            onSnapChange(nearestSnap(dragHeight, containerHeight));
+          if (d?.moved) {
+            onSnapChange(nearestSnap(d.height, containerHeight, peekPx));
             suppressClick.current = true;
           }
-          setDragHeight(null);
+          endDrag();
         }}
         onClick={() => {
           // Taps and keyboard activation cycle sizes; the click that ends a drag doesn't.
@@ -104,15 +152,16 @@ export function BottomSheet({
           }
           onSnapChange(NEXT[snap]);
         }}
-        onPointerCancel={() => {
-          drag.current = null;
-          setDragHeight(null);
-        }}
+        onPointerCancel={endDrag}
       >
         <span className="h-1.5 w-10 rounded-full bg-line" aria-hidden />
       </button>
-      {header && <div className="shrink-0 px-4 pb-2">{header}</div>}
-      <div className={cn("min-h-0 flex-1 overscroll-contain", snap === "peek" && dragHeight === null ? "overflow-hidden" : "overflow-y-auto")}>
+      {header && (
+        <div ref={headerRef} className="shrink-0 px-4 pb-2">
+          {header}
+        </div>
+      )}
+      <div className={cn("min-h-0 flex-1 overscroll-contain", snap === "peek" && !dragging ? "overflow-hidden" : "overflow-y-auto")}>
         {children}
       </div>
     </div>

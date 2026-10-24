@@ -86,13 +86,13 @@ describe("upgrading a populated 0002 database to the current schema", () => {
     await migrate(db as never, { migrationsFolder: MIGRATIONS });
 
     const [applied] = await rows<{ n: number }>(db, sql`select count(*)::int as n from drizzle.__drizzle_migrations`);
-    expect(applied!.n).toBe(6);
+    expect(applied!.n).toBe(7);
     expect(await tableCounts(db)).toEqual(before);
     // The fixture really had data in every affected table.
     expect(Math.min(before.events, before.reports, before.sources, before.jobs)).toBeGreaterThan(0);
   });
 
-  it.each(["verification_runs", "geocode_cache"])("protects the new table %s like every other Verity table", async (name) => {
+  it.each(["verification_runs", "geocode_cache", "report_schedules"])("protects the new table %s like every other Verity table", async (name) => {
     const [table] = await rows<{ rls: boolean; owner: string; anon: boolean; authenticated: boolean }>(
       db,
       sql`select c.relrowsecurity as rls, pg_get_userbyid(c.relowner) as owner,
@@ -130,5 +130,15 @@ describe("upgrading a populated 0002 database to the current schema", () => {
     await expect(db.execute(sql`update verification_runs set agent_id = 'agent_x' where id = ${run!.id}`)).rejects.toThrow();
     await expect(db.execute(sql`update verification_runs set agent_cleaned_up_at = now() where id = ${run!.id}`)).rejects.toThrow();
     await expect(db.execute(sql`update verification_runs set extract_count = 51 where id = ${run!.id}`)).rejects.toThrow();
+  });
+
+  it("0006 adds report_schedules for existing reports, with order and report constraints", async () => {
+    const [report] = await rows<{ id: string }>(db, sql`select id from reports limit 1`);
+    await db.execute(sql`insert into report_schedules (report_id, scheduled_start_at, scheduled_end_at) values (${report!.id}, now(), now() + interval '2 hours')`);
+    await expect(db.execute(sql`update report_schedules set scheduled_end_at = scheduled_start_at - interval '1 minute' where report_id = ${report!.id}`)).rejects.toThrow();
+    await expect(db.execute(sql`insert into report_schedules (report_id, scheduled_start_at) values (gen_random_uuid(), now())`)).rejects.toThrow();
+    // Existing events keep their (empty) established schedule.
+    const [event] = await rows<{ n: number }>(db, sql`select count(*)::int as n from events where scheduled_start_at is not null and not is_demo`);
+    expect(event!.n).toBe(0);
   });
 });

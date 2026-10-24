@@ -172,6 +172,15 @@ balancer, set `TRUST_PROXY` so the client address is the real one.
 
 Phase 3 adds per-event cooldowns and a global daily Nimble budget.
 
+**Paid work is opt-in.** `NIMBLE_DAILY_SEARCH_BUDGET`,
+`NIMBLE_DAILY_EXTRACT_BUDGET`, `NIMBLE_DAILY_AGENT_BUDGET` and
+`NIMBLE_AGENT_MAX_PER_EVENT` default to `0`. A missing, blank or
+whitespace-only value means `0`, which means no paid call of that kind. Each
+paid call is reserved against its budget before it is made (`reserveBudget`
+refuses any amount above the cap). With search at `0`, a job is deferred to the
+next UTC day and never concluded. The manual `nimble-*-smoke` scripts are
+separate and need their own explicit opt-in.
+
 ## Input validation
 
 All bodies and queries are validated by the **same Zod schemas** (shared
@@ -225,7 +234,8 @@ works and that client roles can't read or write. It also fails if a later
 migration adds a table without RLS.
 
 Every later table gets the same treatment in its own migration: `0003` enables
-RLS on `verification_runs` and revokes the client roles explicitly.
+RLS on `verification_runs` and revokes the client roles explicitly, and `0006`
+does the same for `report_schedules`.
 `test/migrations.test.ts` upgrades a populated `0002` database under
 Supabase-like roles to the current schema and checks that no rows are lost and
 the new table is protected.
@@ -276,6 +286,16 @@ remote, and for a remote database:
 Refusals name the variables, never the URL or credentials (tested). The
 real-PostgreSQL test suites accept only a local `TEST_DATABASE_URL`, refuse
 Supabase hosts and never read `DATABASE_URL`.
+
+### Reported schedules
+
+A reporter may give an optional start and end time for a planned event. It is
+stored per report in `report_schedules` (RLS on, client roles revoked) as the
+reporter's **claim**, and is never copied to the event's established schedule
+(`events.scheduled_*`). A claim can't change status: the decision rules read
+only the established schedule. The worker uses claims only as search and
+identity hints (search window, date compatibility, an unconfirmed note in the
+Agent prompt). A wrong claim can only make sources count as context.
 
 ## User-submitted URLs (SSRF)
 

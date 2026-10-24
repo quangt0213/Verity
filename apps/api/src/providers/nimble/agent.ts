@@ -59,15 +59,31 @@ export const AGENT_OUTPUT_SCHEMA = {
   required: ["sources"],
 } as const;
 
-export function buildAgentPrompt(input: { category: string; title: string; locationTerms: string[]; city: string | null; region: string | null; firstSeenAt: Date; scheduledStartAt: Date | null; reason: string }): string {
+export function buildAgentPrompt(input: {
+  category: string;
+  title: string;
+  locationTerms: string[];
+  city: string | null;
+  region: string | null;
+  firstSeenAt: Date;
+  scheduledStartAt: Date | null;
+  /** A reporter's claimed start (planned events): passed on as unconfirmed, never as the schedule. */
+  reportedStartAt?: Date | null;
+  reason: string;
+}): string {
   const what = CATEGORY_WORDS[input.category] ?? input.category.replace(/_/g, " ");
   const where = [...input.locationTerms.slice(0, 2), input.city, input.region].map((p) => sanitizeQueryText(p)).filter(Boolean).join(", ");
-  const when = input.scheduledStartAt && CATEGORY_KIND[input.category as keyof typeof CATEGORY_KIND] === "planned"
-    ? `It is scheduled to start ${input.scheduledStartAt.toISOString()}.`
-    : `It was first reported around ${input.firstSeenAt.toISOString()}.`;
+  const planned = CATEGORY_KIND[input.category as keyof typeof CATEGORY_KIND] === "planned";
+  const when =
+    input.scheduledStartAt && planned
+      ? `It is scheduled to start ${input.scheduledStartAt.toISOString()}.`
+      : input.reportedStartAt && planned
+        ? `It was first reported around ${input.firstSeenAt.toISOString()}; a reporter says it is scheduled to start ${input.reportedStartAt.toISOString()} (unconfirmed).`
+        : `It was first reported around ${input.firstSeenAt.toISOString()}.`;
   return [
     `Check whether this reported real-world event is happening: a ${what} described as "${sanitizeQueryText(input.title)}" at ${where || "an unspecified place"}. ${when}`,
     "Find current reports from official agencies, the organizations involved and local news. For each source, give its URL, whether it says the event is happening, has ended, or is not happening, and its publication date and event time exactly as the source states them.",
+    "Only cite sources about this specific event at this place: not other events of the same kind, other editions, or other places with the same name. An announcement shows an event is planned, not that it is happening.",
     "Cite the exact sentences you rely on. Do not guess dates.",
   ].join("\n");
 }
@@ -151,7 +167,17 @@ export function createNimbleInvestigator(options: { apiKey: string; baseUrl: str
 
     async start({ event, context, reason, effort, signal }): Promise<AgentStart> {
       const body = {
-        input: buildAgentPrompt({ category: event.category, title: event.title, locationTerms: context.locationTerms, city: context.city, region: context.region, firstSeenAt: event.firstSeenAt, scheduledStartAt: event.scheduledStartAt, reason }),
+        input: buildAgentPrompt({
+          category: event.category,
+          title: event.title,
+          locationTerms: context.locationTerms,
+          city: context.city,
+          region: context.region,
+          firstSeenAt: event.firstSeenAt,
+          scheduledStartAt: event.scheduledStartAt,
+          reportedStartAt: event.reportedSchedules?.[0]?.start ?? null,
+          reason,
+        }),
         effort,
         use_case: "research",
         output_schema: AGENT_OUTPUT_SCHEMA,

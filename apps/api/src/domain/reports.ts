@@ -1,7 +1,7 @@
 import { CATEGORY_KIND, type ReportEventPayload, type ReportEventResult } from "@verity/contracts";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
-import { events, eventTimeline, reports, sourceRecords } from "../db/schema";
+import { events, eventTimeline, reports, reportSchedules, sourceRecords } from "../db/schema";
 import { findDuplicateEvent } from "./dedupe";
 import { PINNED_LOCATION_PLACEHOLDER } from "./labels";
 import { enqueueVerification } from "./outbox";
@@ -16,6 +16,14 @@ const COMMUNITY_LINEAGE = "community";
  * No network calls happen inside it; verification runs after commit (Phase 3).
  * The reporter comes from the authenticated session, never the request body.
  * New events are always UNVERIFIED.
+ *
+ * A reported schedule (planned events) is stored with the REPORT only
+ * (report_schedules). It is
+ * never copied to the event's established schedule (events.scheduled_*),
+ * whether the event is new or existing: the decision rules use that schedule
+ * (freshness, "the scheduled end has passed"), and a reporter's claim must
+ * not move an event's status. The worker uses claims only to search for and
+ * recognize the event.
  */
 export async function createReport(db: Database, reporterUserId: string, input: ReportEventPayload, now = new Date()): Promise<ReportEventResult> {
   const { latitude, longitude } = input.location.coordinates;
@@ -83,6 +91,14 @@ export async function createReport(db: Database, reporterUserId: string, input: 
       })
       .returning({ id: reports.id });
     const reportId = report!.id;
+    if (input.scheduled_start_at) {
+      await tx.insert(reportSchedules).values({
+        reportId,
+        scheduledStartAt: new Date(input.scheduled_start_at),
+        scheduledEndAt: input.scheduled_end_at ? new Date(input.scheduled_end_at) : null,
+        createdAt: now,
+      });
+    }
 
     // Community reports form one lineage per event: many reporters add weight
     // to the community signal but count as a single independent source.

@@ -5,9 +5,7 @@ import { EmptyState } from "../components/ui/States";
 import { EventDetailPanel } from "../features/events/EventDetailPanel";
 import { FeedPanel } from "../features/events/FeedPanel";
 import { FollowingPage } from "../features/following/FollowingPage";
-import { MapShell } from "../features/map/MapShell";
 import { Landing } from "../features/onboarding/Landing";
-import { ReportPage } from "../features/report/ReportPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { readStored, STORAGE_KEYS } from "../lib/storage";
 import { useMaypop } from "../maypop/MaypopProvider";
@@ -52,6 +50,11 @@ function NotFound() {
   );
 }
 
+/** Shown only while the first route's code loads on a cold start. */
+function RouteLoading() {
+  return <div className="h-full bg-bg" aria-busy="true" />;
+}
+
 function RouteError() {
   return (
     <div className="grid h-full place-items-center p-6">
@@ -69,17 +72,20 @@ export const routes: RouteObject[] = [
     path: "/",
     element: <Root />,
     errorElement: <RouteError />,
+    hydrateFallbackElement: <RouteLoading />,
     children: [
       { index: true, element: <IndexRedirect /> },
       { path: "welcome", element: <Landing /> },
+      // The map and report routes load MapLibre (~270 KB gzipped) on demand,
+      // so the welcome, settings and following pages don't download it.
       {
-        element: <MapShell />,
+        lazy: async () => ({ Component: (await import("../features/map/MapShell")).MapShell }),
         children: [
           { path: "map", element: <FeedPanel /> },
           { path: "events/:eventId", element: <EventDetailPanel /> },
         ],
       },
-      { path: "report", element: <ReportPage /> },
+      { path: "report", lazy: async () => ({ Component: (await import("../features/report/ReportPage")).ReportPage }) },
       { path: "following", element: <FollowingPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "*", element: <NotFound /> },

@@ -6,7 +6,7 @@ import { isLocalDatabase } from "../../src/db/target-guard";
 /**
  * The real-PostgreSQL suites run ONLY against a local, disposable server named
  * by TEST_DATABASE_URL (never DATABASE_URL, never a hosted database). Each
- * suite creates its own throwaway database, migrates it (0000-0005) and drops
+ * suite creates its own throwaway database, migrates it (0000-0006) and drops
  * it afterwards.
  */
 

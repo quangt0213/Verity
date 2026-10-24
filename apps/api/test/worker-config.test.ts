@@ -24,21 +24,87 @@ function errorMessage(fn: () => unknown): string {
 }
 
 describe("verification worker configuration", () => {
-  it("accepts a minimal production configuration with conservative defaults", () => {
+  it("accepts a minimal production configuration, with every paid budget off by default", () => {
     const config = loadWorkerConfig(goodProduction);
     expect(config.nimble).toMatchObject({
       apiKey: KEY,
       baseUrl: "https://sdk.nimbleway.com",
       maxSearchesPerJob: 3,
-      dailySearchBudget: 200,
-      dailyAgentBudget: 20,
+      maxExtractsPerJob: 4,
+      dailySearchBudget: 0,
+      dailyExtractBudget: 0,
+      dailyAgentBudget: 0,
       agentEffort: "low",
       agentConflictEffort: "low",
       agentEventCooldownHours: 6,
-      agentMaxPerEvent: 2,
+      agentMaxPerEvent: 0,
       agentPollTimeoutSeconds: 90,
     });
     expect(config).toMatchObject({ concurrency: 2, pollIntervalMs: 5_000, leaseSeconds: 600 });
+  });
+
+  describe("paid Nimble work is opt-in", () => {
+    const BUDGETS = {
+      NIMBLE_DAILY_SEARCH_BUDGET: "dailySearchBudget",
+      NIMBLE_DAILY_EXTRACT_BUDGET: "dailyExtractBudget",
+      NIMBLE_DAILY_AGENT_BUDGET: "dailyAgentBudget",
+      NIMBLE_AGENT_MAX_PER_EVENT: "agentMaxPerEvent",
+    } as const;
+    const budgets = (env: Record<string, string>) => {
+      const n = loadWorkerConfig({ ...goodProduction, ...env }).nimble;
+      return Object.fromEntries(Object.values(BUDGETS).map((k) => [k, n[k]]));
+    };
+    const allZero = { dailySearchBudget: 0, dailyExtractBudget: 0, dailyAgentBudget: 0, agentMaxPerEvent: 0 };
+
+    it("missing budget variables mean 0 (no paid calls), in every environment", () => {
+      expect(budgets({})).toEqual(allZero);
+      for (const NODE_ENV of ["development", "test"]) {
+        const n = loadWorkerConfig({ NODE_ENV }).nimble;
+        expect([n.dailySearchBudget, n.dailyExtractBudget, n.dailyAgentBudget, n.agentMaxPerEvent]).toEqual([0, 0, 0, 0]);
+      }
+    });
+
+    it.each([
+      ["blank", ""],
+      ["whitespace", "  "],
+      ["tab and newline", "\t\n"],
+    ])("a %s value is treated as missing, so it means 0", (_label, value) => {
+      expect(budgets(Object.fromEntries(Object.keys(BUDGETS).map((k) => [k, value])))).toEqual(allZero);
+    });
+
+    it("explicit positive values are kept as configured", () => {
+      expect(budgets({ NIMBLE_DAILY_SEARCH_BUDGET: "200", NIMBLE_DAILY_EXTRACT_BUDGET: "400", NIMBLE_DAILY_AGENT_BUDGET: "20", NIMBLE_AGENT_MAX_PER_EVENT: "2" })).toEqual({
+        dailySearchBudget: 200,
+        dailyExtractBudget: 400,
+        dailyAgentBudget: 20,
+        agentMaxPerEvent: 2,
+      });
+      expect(budgets({ NIMBLE_DAILY_SEARCH_BUDGET: "10000", NIMBLE_DAILY_EXTRACT_BUDGET: "20000", NIMBLE_DAILY_AGENT_BUDGET: "500", NIMBLE_AGENT_MAX_PER_EVENT: "10" })).toEqual({
+        dailySearchBudget: 10_000,
+        dailyExtractBudget: 20_000,
+        dailyAgentBudget: 500,
+        agentMaxPerEvent: 10,
+      });
+      // An explicit 0 is the same as unset.
+      expect(budgets({ NIMBLE_DAILY_SEARCH_BUDGET: "0" })).toEqual(allZero);
+    });
+
+    it.each([
+      ["NIMBLE_DAILY_SEARCH_BUDGET", "10001"],
+      ["NIMBLE_DAILY_EXTRACT_BUDGET", "20001"],
+      ["NIMBLE_DAILY_AGENT_BUDGET", "501"],
+      ["NIMBLE_AGENT_MAX_PER_EVENT", "11"],
+      ["NIMBLE_DAILY_SEARCH_BUDGET", "-1"],
+      ["NIMBLE_DAILY_AGENT_BUDGET", "2.5"],
+      ["NIMBLE_DAILY_EXTRACT_BUDGET", "lots"],
+    ])("keeps the ranges: refuses %s=%s", (name, value) => {
+      expect(errorMessage(() => loadWorkerConfig({ ...goodProduction, [name]: value }))).toContain(name);
+    });
+
+    it("leaves the per-job ceilings unchanged", () => {
+      const n = loadWorkerConfig(goodProduction).nimble;
+      expect([n.maxSearchesPerJob, n.maxExtractsPerJob]).toEqual([3, 4]);
+    });
   });
 
   it.each([

@@ -42,7 +42,7 @@ export function postgresOptions(url: string, ca: string | null): NonNullable<Par
   return { ...base, ssl: { ca, rejectUnauthorized: true } };
 }
 
-function migrationsFolder(): string {
+export function migrationsFolder(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
     process.env.MIGRATIONS_DIR,

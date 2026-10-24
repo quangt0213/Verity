@@ -3,6 +3,7 @@ import { detectAttributions } from "./attribution";
 import { dayLabel, parseDateValue, timesConsistent, type DayZoneSlack, type EvidenceTime } from "./dates";
 import type { NormalizedEvidence } from "./evidence";
 import type { SearchContext } from "./geocoding";
+import { applyIdentity, checkIdentity, namePatterns, type EventIdentity } from "./identity";
 import { classifyOfficial, OFFICIAL_SOURCES, type OfficialSource } from "./official-sources";
 import { DEFAULT_POLICY, type VerificationPolicy } from "./policy";
 import { activeTerms, classifyStance } from "./stance";
@@ -199,6 +200,8 @@ export function agentEvidence(input: {
   runId: string | null;
   policy?: VerificationPolicy;
   registry?: readonly OfficialSource[];
+  /** Is a cited page about THIS event (identity.ts)? The Agent choosing a page never makes it so. */
+  identity?: EventIdentity;
 }): AgentEvidenceResult {
   const policy = input.policy ?? DEFAULT_POLICY;
   const registry = input.registry ?? OFFICIAL_SOURCES;
@@ -235,9 +238,10 @@ export function agentEvidence(input: {
       if (excerptless.length < MAX_SOURCES) excerptless.push({ url, title: group.title });
       continue;
     }
-    const sentence = selectExcerpt(group.excerpts.join("\n"), input.category, input.context);
+    const names = namePatterns(input.identity);
+    const sentence = selectExcerpt(group.excerpts.join("\n"), input.category, input.context, names);
     const excerpt = sentence ?? (group.excerpts[0]!.length <= 1000 ? group.excerpts[0]! : null);
-    const stance = sentence ? classifyStance(sentence, input.category) : "context";
+    const stance = sentence ? classifyStance(sentence, input.category, names) : "context";
     const official = classifyOfficial(url, input.category, registry);
     const domain = publisherDomain(url);
     const publisher = (official?.organization ?? domain ?? new URL(url).hostname).slice(0, 200);
@@ -254,7 +258,7 @@ export function agentEvidence(input: {
     const published = establish("published", proposal?.publishedAt);
     const eventTime = establish("event_time", proposal?.eventTime);
 
-    evidence.push({
+    const cited: NormalizedEvidence = {
       id: null,
       canonicalUrl: url,
       originalUrl: null,
@@ -271,7 +275,7 @@ export function agentEvidence(input: {
       retrievedAt: input.now,
       excerpt,
       // Provenance is shown as found_via ("extended verification"), never as a note that reads like trust.
-    note: null,
+      note: null,
       stance,
       locationMatch: matchLocation([group.title ?? "", excerpt ?? ""].join(". "), input.context),
       isPrimary: official?.primaryForCategory ?? false,
@@ -284,7 +288,9 @@ export function agentEvidence(input: {
       classifiedBy: "rules",
       query: null,
       providerRequestId: input.runId?.slice(0, 128) ?? null,
-    });
+    };
+    const check = input.identity ? checkIdentity({ title: group.title, excerpt, text: group.excerpts.join("\n"), locationMatch: cited.locationMatch }, input.identity) : null;
+    evidence.push(check ? applyIdentity(cited, check) : cited);
     stats.accepted += 1;
   }
   return { evidence, unsupported, excerptless, stats };

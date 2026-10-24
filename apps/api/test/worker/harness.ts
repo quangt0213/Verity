@@ -26,9 +26,25 @@ export class FakeClock {
 
 export const silentLog: WorkerLog = { info: () => {}, warn: () => {}, error: () => {} };
 
+/**
+ * Paid work is opt-in (budgets default to 0), so the worker tests opt in
+ * explicitly, the way an operator would. Providers are fakes or mocked HTTP.
+ */
+export const TEST_BUDGET_ENV = {
+  NIMBLE_DAILY_SEARCH_BUDGET: "200",
+  NIMBLE_DAILY_EXTRACT_BUDGET: "400",
+  NIMBLE_DAILY_AGENT_BUDGET: "20",
+  NIMBLE_AGENT_MAX_PER_EVENT: "2",
+} as const;
+
 export function testConfig(nimble: Partial<WorkerConfig["nimble"]> = {}, rest: Partial<WorkerConfig> = {}): WorkerConfig {
-  const base = loadWorkerConfig({ NODE_ENV: "test", NIMBLE_API_KEY: "fake-key-for-tests" });
+  const base = loadWorkerConfig({ NODE_ENV: "test", NIMBLE_API_KEY: "fake-key-for-tests", ...TEST_BUDGET_ENV });
   return { ...base, ...rest, nimble: { ...base.nimble, ...nimble } };
+}
+
+/** The worker exactly as configured when no budget variable is set (all paid work off). */
+export function defaultBudgetConfig(rest: Partial<WorkerConfig> = {}): WorkerConfig {
+  return { ...loadWorkerConfig({ NODE_ENV: "test", NIMBLE_API_KEY: "fake-key-for-tests" }), ...rest };
 }
 
 export type RetrieverScript = (call: number) => RetrievalResult | Promise<RetrievalResult>;
@@ -137,7 +153,11 @@ export function deps(ctx: TestContext, clock: FakeClock, over: Partial<WorkerDep
 
 let place = 0;
 /** File a community report at a fresh location (so tests never dedupe into each other's events). */
-export async function newEvent(ctx: TestContext, token: string, over: { title?: string; category?: string; label?: string } = {}): Promise<string> {
+export async function newEvent(
+  ctx: TestContext,
+  token: string,
+  over: { title?: string; category?: string; label?: string; description?: string; extra?: Record<string, unknown> } = {},
+): Promise<string> {
   place += 1;
   const res = await ctx.request({
     method: "POST",
@@ -147,8 +167,9 @@ export async function newEvent(ctx: TestContext, token: string, over: { title?: 
     payload: {
       category: over.category ?? "road_closure",
       title: over.title ?? `Road blocked near test site ${place}`,
-      description: "Two lanes closed, police directing traffic.",
+      description: over.description ?? "Two lanes closed, police directing traffic.",
       location: { coordinates: { latitude: 30 + place * 0.05, longitude: -100 - place * 0.05 }, label: over.label ?? `Test St & ${place}th Ave` },
+      ...over.extra,
     },
   });
   if (res.statusCode !== 201) throw new Error(`report failed: ${res.statusCode} ${res.body}`);
@@ -157,9 +178,13 @@ export async function newEvent(ctx: TestContext, token: string, over: { title?: 
 
 /** Claim the (only) ready job for an event. */
 export async function claimFor(ctx: TestContext, clock: FakeClock, eventId: string, workerId = "w_test"): Promise<Lease> {
-  // Make only this event's job ready, so concurrently created jobs don't interfere.
-  await ctx.db.execute(sql`update verification_jobs set available_at = ${clock.now()} where event_id = ${eventId} and status = 'pending' and available_at <= ${clock.now()}`);
-  const leases = await claimJobs(ctx.db, { workerId, limit: 50, now: clock.now() });
+  // Make this event's job the OLDEST ready one (claims go oldest first and never exceed their limit),
+  // so other tests' leftover ready jobs in the same database can't get in the way.
+  await ctx.db.execute(sql`
+    update verification_jobs
+       set available_at = least(${clock.now()}::timestamptz, (select min(available_at) from verification_jobs where status = 'pending') - interval '1 second')
+     where event_id = ${eventId} and status = 'pending' and available_at <= ${clock.now()}`);
+  const leases = await claimJobs(ctx.db, { workerId, limit: 1, now: clock.now() });
   const lease = leases.find((l) => l.eventId === eventId);
   // Release unrelated claims back to pending.
   for (const other of leases.filter((l) => l.eventId !== eventId)) {

@@ -6,8 +6,13 @@ import { resolveDatabaseCa } from "../db/tls";
 /**
  * Configuration for the verification worker, a separate process from the API.
  * Only the worker holds NIMBLE_API_KEY; it needs no session secret, SMTP or
- * origin settings. Budgets bound what verification can spend; the defaults are
- * deliberately conservative.
+ * origin settings. Budgets bound what verification can spend.
+ *
+ * PAID WORK IS OPT-IN. The daily search, extract and agent budgets and the
+ * per-event agent cap default to 0: a missing or blank value means no paid
+ * Nimble calls of that kind. An operator turns each one on with an explicit
+ * positive value (e.g. NIMBLE_DAILY_SEARCH_BUDGET=200). With search at 0, a job
+ * is deferred until the next budget window, never treated as "no evidence".
  */
 
 /** Nimble API hosts the key may be sent to. Anything else is refused. */
@@ -37,14 +42,14 @@ const workerEnvSchema = z.object({
   VERIFICATION_POLL_INTERVAL_MS: int(1_000, 60_000, 5_000),
   VERIFICATION_LEASE_SECONDS: int(120, 3_600, 600),
   NIMBLE_MAX_SEARCHES_PER_JOB: int(1, 5, 3),
-  NIMBLE_DAILY_SEARCH_BUDGET: int(0, 10_000, 200),
+  NIMBLE_DAILY_SEARCH_BUDGET: int(0, 10_000, 0),
   /** A ceiling, not a target: the worker stops extracting as soon as further pages can't change the outcome. */
   NIMBLE_MAX_EXTRACTS_PER_JOB: int(0, 4, 4),
-  NIMBLE_DAILY_EXTRACT_BUDGET: int(0, 20_000, 400),
-  NIMBLE_DAILY_AGENT_BUDGET: int(0, 500, 20),
+  NIMBLE_DAILY_EXTRACT_BUDGET: int(0, 20_000, 0),
+  NIMBLE_DAILY_AGENT_BUDGET: int(0, 500, 0),
   NIMBLE_AGENT_CONFLICT_EFFORT: z.enum(AGENT_EFFORTS).default("low"),
   NIMBLE_AGENT_EVENT_COOLDOWN_HOURS: int(1, 168, 6),
-  NIMBLE_AGENT_MAX_PER_EVENT: int(0, 10, 2),
+  NIMBLE_AGENT_MAX_PER_EVENT: int(0, 10, 0),
   NIMBLE_AGENT_POLL_TIMEOUT_SECONDS: int(30, 600, 90),
   GEOCODER_PROVIDER: z.enum(["none", "nominatim"]).default("none"),
   GEOCODER_URL: z.string().optional(),

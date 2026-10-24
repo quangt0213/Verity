@@ -29,6 +29,10 @@ export type RetrievalMethod = (typeof RETRIEVAL_METHODS)[number];
 export const CLASSIFIERS = ["community", "rules", "agent"] as const;
 export type Classifier = (typeof CLASSIFIERS)[number];
 
+/** Whether a source is about THIS event (identity.ts). Absent on community reports and records stored before the check existed. */
+export const IDENTITY_VERDICTS = ["match", "uncertain", "mismatch", "unchecked"] as const;
+export type IdentityVerdict = (typeof IDENTITY_VERDICTS)[number];
+
 /** How a source was attributed: an explicit "according to X", or a syndication marker such as "(AP) —". */
 export const ATTRIBUTION_KINDS = ["explicit", "syndication"] as const;
 export interface Attribution {
@@ -99,6 +103,8 @@ export interface NormalizedEvidence {
   /** The query that found it (event wording and place names only; never user data). */
   query: string | null;
   providerRequestId: string | null;
+  /** The event-identity check (identity.ts); a record that isn't "match"/"unchecked" never takes a stance. */
+  identity?: IdentityVerdict | null;
 }
 
 export interface LineageAssignment {
@@ -147,6 +153,7 @@ export const extractionMetadataSchema = z.object({
   lineage_reason: z.enum(LINEAGE_REASONS),
   lineage_related_to: shortText(2048).nullable(),
   lineage_via: shortText(120).nullable(),
+  identity: z.enum(IDENTITY_VERDICTS).nullable().optional(),
 });
 export type ExtractionMetadata = z.infer<typeof extractionMetadataSchema>;
 
@@ -186,6 +193,7 @@ export function toSourceRecordValues(
     lineage_reason: e.lineage.reason,
     lineage_related_to: cap(e.lineage.relatedTo, 2048),
     lineage_via: cap(e.lineage.via, 120),
+    identity: e.identity ?? null,
   };
   return {
     eventId,
@@ -266,6 +274,7 @@ export function fromSourceRecord(row: SourceRecordRow): EvidenceRecord {
     classifiedBy: m?.classified_by ?? (community ? "community" : "rules"),
     query: m?.query ?? null,
     providerRequestId: m?.provider_request_id ?? null,
+    ...(m?.identity ? { identity: m.identity } : {}),
     lineage: {
       lineageId: row.lineageId,
       reason: m?.lineage_reason ?? (community ? "community" : "own_origin"),

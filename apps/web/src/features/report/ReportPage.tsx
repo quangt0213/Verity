@@ -1,4 +1,5 @@
 import {
+  CATEGORY_KIND,
   checkPublicHttpUrl,
   EVENT_CATEGORIES,
   LIMITS,
@@ -6,8 +7,8 @@ import {
   type Coordinates,
   type EventCategory,
 } from "@verity/contracts";
-import { Info } from "lucide";
-import { useState, type FormEvent } from "react";
+import { CircleHelp, Info } from "lucide";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useApi } from "../../api/ApiProvider";
 import { Card, PageLayout } from "../../app/PageLayout";
@@ -21,8 +22,24 @@ import { approximateCoordinates } from "../../lib/geo";
 import { useTheme } from "../../theme/ThemeProvider";
 import { useAuth, useGuardedWrite } from "../auth/AuthProvider";
 import { LocationPicker } from "./LocationPicker";
+import { ArrivalCheck, type SubmitAttempt } from "./ArrivalCheck";
+import { KEPT, submitFailureErrors, submitOutcome, UNKNOWN_HEADLINE, unknownOutcomeReason, type FieldErrors } from "./submit-errors";
 
-type FieldErrors = Partial<Record<"category" | "title" | "description" | "location" | "source_url" | "form", string>>;
+/** A `datetime-local` value is the reporter's local wall-clock time; send it as an exact instant. */
+function localToIso(value: string): string | undefined {
+  if (!value) return undefined;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? value : at.toISOString();
+}
+
+/** The reporter's time zone in words ("Pacific Daylight Time"), since the schedule fields are local times. */
+function localTimeZoneName(): string | null {
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZoneName: "long" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const inputClass =
   "mt-1 w-full rounded-xl bg-surface px-3 text-sm ring-1 ring-line placeholder:text-muted focus:ring-2 focus:ring-accent focus:outline-none aria-invalid:ring-red-500";
@@ -49,22 +66,54 @@ export function ReportPage() {
   const [description, setDescription] = useState("");
   const [label, setLabel] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
   const [coordinates, setCoordinates] = useState<Coordinates>(approximateCoordinates(startCenter));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const alertRef = useRef<HTMLParagraphElement>(null);
+  const unknownRef = useRef<HTMLDivElement>(null);
+  const focusFirstError = useRef(false);
+  // A second submit while one is in flight is ignored (a fast double click lands before the button disables).
+  const inFlight = useRef(false);
+  // Remounts the alert per failed attempt, so the same message is announced again.
+  const [attempt, setAttempt] = useState(0);
+  // Set when the service may or may not have stored the last attempt.
+  const [unknownOutcome, setUnknownOutcome] = useState<{ attempt: SubmitAttempt; reason: string } | null>(null);
+  const [timeZone] = useState(localTimeZoneName);
+
+  // After a failed submit, move focus to the first field that needs attention.
+  useEffect(() => {
+    if (!focusFirstError.current) return;
+    focusFirstError.current = false;
+    const form = formRef.current;
+    const target = errors.category
+      ? form?.querySelector<HTMLElement>('input[name="category"]')
+      : (form?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? alertRef.current ?? unknownRef.current);
+    target?.focus();
+  }, [errors]);
 
   const policy = api.writePolicy;
   const { session } = useAuth();
   const guarded = useGuardedWrite();
 
+  // Only planned events have a schedule; the fields keep their values if the category changes back.
+  const planned = category !== null && CATEGORY_KIND[category] === "planned";
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (inFlight.current) return;
+    const scheduledStart = planned ? localToIso(startsAt) : undefined;
+    const scheduledEnd = planned ? localToIso(endsAt) : undefined;
     const payload = {
       category: category ?? undefined,
       title,
       ...(description.trim() ? { description } : {}),
       location: { coordinates: approximateCoordinates(coordinates), ...(label.trim() ? { label } : {}) },
       ...(sourceUrl.trim() ? { source_url: sourceUrl.trim() } : {}),
+      ...(scheduledStart ? { scheduled_start_at: scheduledStart } : {}),
+      ...(scheduledEnd ? { scheduled_end_at: scheduledEnd } : {}),
     };
 
     // Same schema the service uses; the service re-validates everything.
@@ -75,26 +124,41 @@ export function ReportPage() {
         const key = String(issue.path[0] ?? "form") as keyof FieldErrors;
         next[key] ??= key === "category" ? "Choose a category" : issue.message;
       }
+      focusFirstError.current = true;
       setErrors(next);
       return;
     }
     setErrors({});
+    setUnknownOutcome(null);
     setSubmitting(true);
+    inFlight.current = true;
+    const startedAt = Date.now();
     // If sign-in is needed, the dialog opens and the same report is submitted
     // right after; the form keeps everything that was typed.
-    const result = await guarded(() => api.reportEvent(payload as Parameters<typeof api.reportEvent>[0]), "Sign in to submit your report");
-    setSubmitting(false);
+    let result;
+    try {
+      result = await guarded(() => api.reportEvent(payload as Parameters<typeof api.reportEvent>[0]), "Sign in to submit your report");
+    } catch {
+      result = { ok: false as const, error: { code: "network" as const, message: "", outcomeUnknown: true as const } };
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
+    }
     if (!result) return;
 
     if (!result.ok) {
-      if (result.error.fields) {
-        const next: FieldErrors = {};
-        for (const [key, message] of Object.entries(result.error.fields)) {
-          next[(key.split(".")[0] ?? "form") as keyof FieldErrors] ??= message;
-        }
-        setErrors(next);
+      // Every field keeps its value, the schedule included; nothing is resent automatically.
+      focusFirstError.current = true;
+      setAttempt((n) => n + 1);
+      if (submitOutcome(result.error) === "unknown") {
+        // The service may have stored it: say so, and offer a check before the user decides to resend.
+        setUnknownOutcome({
+          attempt: { at: startedAt, title: payload.title, coordinates: payload.location.coordinates },
+          reason: unknownOutcomeReason(result.error),
+        });
+        setErrors({});
       } else {
-        setErrors({ form: result.error.message });
+        setErrors(submitFailureErrors(result.error, Boolean(scheduledStart || scheduledEnd)));
       }
       return;
     }
@@ -129,7 +193,7 @@ export function ReportPage() {
         </div>
       )}
 
-      <form onSubmit={onSubmit} noValidate className="space-y-4">
+      <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-4">
         <Card>
           <fieldset aria-describedby={errors.category ? "category-error" : undefined}>
             <legend className="text-sm font-semibold">What's happening?</legend>
@@ -209,6 +273,53 @@ export function ReportPage() {
           </div>
         </Card>
 
+        {planned && (
+          <Card>
+            <fieldset aria-describedby="schedule-help">
+              <legend className="text-sm font-semibold">
+                When is it scheduled? <span className="font-normal text-muted">(optional)</span>
+              </legend>
+              <p id="schedule-help" className="mt-1 text-xs text-muted">
+                If you know the schedule, Verity uses it to find this event. A schedule shows it's planned, not that it's happening.
+                {timeZone && ` Times are in your time zone (${timeZone}).`}
+              </p>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="report-starts" className="text-sm font-medium">
+                    Starts
+                  </label>
+                  <input
+                    id="report-starts"
+                    type="datetime-local"
+                    value={startsAt}
+                    onChange={(e) => setStartsAt(e.target.value)}
+                    aria-invalid={Boolean(errors.scheduled_start_at)}
+                    aria-describedby={errors.scheduled_start_at ? "starts-error" : undefined}
+                    className={cn(inputClass, "h-11")}
+                  />
+                  <FieldError id="starts-error" message={errors.scheduled_start_at} />
+                </div>
+                <div>
+                  <label htmlFor="report-ends" className="text-sm font-medium">
+                    Ends
+                  </label>
+                  <input
+                    id="report-ends"
+                    type="datetime-local"
+                    value={endsAt}
+                    min={startsAt || undefined}
+                    onChange={(e) => setEndsAt(e.target.value)}
+                    aria-invalid={Boolean(errors.scheduled_end_at)}
+                    aria-describedby={errors.scheduled_end_at ? "ends-error" : undefined}
+                    className={cn(inputClass, "h-11")}
+                  />
+                  <FieldError id="ends-error" message={errors.scheduled_end_at} />
+                </div>
+              </div>
+            </fieldset>
+          </Card>
+        )}
+
         <Card className="space-y-3">
           <p className="text-sm font-semibold">Where?</p>
           <LocationPicker
@@ -266,8 +377,33 @@ export function ReportPage() {
           shown as verified until independent evidence supports it.
         </div>
 
+        {unknownOutcome && (
+          <div
+            key={attempt}
+            ref={unknownRef}
+            role="alert"
+            tabIndex={-1}
+            className="rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-950 focus:outline-none dark:bg-amber-400/10 dark:text-amber-100"
+          >
+            <p className="flex items-start gap-2 font-semibold">
+              <Icon icon={CircleHelp} size={16} className="mt-0.5 shrink-0" />
+              {UNKNOWN_HEADLINE}
+            </p>
+            <p className="mt-1">
+              {unknownOutcome.reason} {KEPT} Before sending it again, check whether it arrived.
+            </p>
+            <ArrivalCheck attempt={unknownOutcome.attempt} />
+          </div>
+        )}
+
         {errors.form && (
-          <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-800 dark:bg-red-400/10 dark:text-red-200">
+          <p
+            key={attempt}
+            ref={alertRef}
+            role="alert"
+            tabIndex={-1}
+            className="rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-800 focus:outline-none dark:bg-red-400/10 dark:text-red-200"
+          >
             {errors.form}
           </p>
         )}
